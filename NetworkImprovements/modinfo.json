@@ -1,0 +1,13 @@
+{
+    "type": "code",
+    "modid": "networkimprovements",
+    "name": "NetworkImprovements",
+    "authors": [
+        "sneezerstein"
+    ],
+    "description": "Rough feedback.",
+    "version": "1.0.0",
+    "dependencies": {
+        "game": ""
+    }
+}

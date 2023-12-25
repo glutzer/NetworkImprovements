@@ -1,0 +1,31 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.6.33815.320
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "CakeBuild", "CakeBuild\CakeBuild.csproj", "{BB0A8093-1671-45EB-839A-D63DC04FB41C}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "NetworkImprovements", "NetworkImprovements\NetworkImprovements.csproj", "{73BD44D7-A946-4E75-A30E-B8FFD3B06A31}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{BB0A8093-1671-45EB-839A-D63DC04FB41C}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{BB0A8093-1671-45EB-839A-D63DC04FB41C}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{BB0A8093-1671-45EB-839A-D63DC04FB41C}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{BB0A8093-1671-45EB-839A-D63DC04FB41C}.Release|Any CPU.Build.0 = Release|Any CPU
+		{73BD44D7-A946-4E75-A30E-B8FFD3B06A31}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{73BD44D7-A946-4E75-A30E-B8FFD3B06A31}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{73BD44D7-A946-4E75-A30E-B8FFD3B06A31}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{73BD44D7-A946-4E75-A30E-B8FFD3B06A31}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ExtensibilityGlobals) = postSolution
+		SolutionGuid = {A54E45D8-E34C-4736-87C3-808E4212130B}
+	EndGlobalSection
+EndGlobal
