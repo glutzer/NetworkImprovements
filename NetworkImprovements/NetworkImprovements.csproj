@@ -53,11 +53,15 @@
   <Content Include="assets\**">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
   </Content>
-  <None Remove="assets\networkmod\patches\arrow.json" />
+  <None Remove="assets\networkmod\patches\bear.json" />
   <None Remove="assets\networkmod\patches\player.json" />
   <Content Include="modinfo.json">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
   </Content>
+</ItemGroup>
+
+<ItemGroup>
+  <Folder Include="assets\networkmod\patches\" />
 </ItemGroup>
 
 </Project>

@@ -1,12 +1,16 @@
 ﻿using HarmonyLib;
 using ProtoBuf;
+using System;
 using System.Collections.Generic;
 using Vintagestory.API.Client;
 using Vintagestory.API.Common;
+using Vintagestory.API.Common.Entities;
 using Vintagestory.API.Server;
 using Vintagestory.API.Util;
+using Vintagestory.Client;
 using Vintagestory.Client.NoObf;
 using Vintagestory.Common;
+using Vintagestory.GameContent;
 using Vintagestory.Server;
 
 /// <summary>
@@ -32,17 +36,29 @@ public class NIM : ModSystem
 
     public override void Start(ICoreAPI api)
     {
-        api.RegisterEntityBehaviorClass("EntityInterpolation", typeof(EntityInterpolation));
-
-        api.RegisterEntityBehaviorClass("EntityControlledPhysics", typeof(EntityControlledPhysics));
-
-        api.RegisterEntityBehaviorClass("EntityPassivePhysics", typeof(EntityPassivePhysics));
-
-        api.RegisterEntityBehaviorClass("EntityCollisionChecker", typeof(EntityCollisionChecker));
-
-        api.RegisterEntityBehaviorClass("EntityPlayerPhysics", typeof(EntityPlayerPhysics));
+        ClassRegistry registry = (api.ClassRegistry as ClassRegistryAPI).GetField<ClassRegistry>("registry");
 
         physicsManager = new PhysicsManager(api);
+
+        var mappings = registry.GetField<Dictionary<string, Type>>("entityBehaviorClassNameToTypeMapping");
+        var mappingsTypeToBehavior = registry.GetField<Dictionary<Type, string>>("entityBehaviorTypeToClassNameMapping");
+
+        mappings.Remove("interpolateposition");
+        mappingsTypeToBehavior.Remove(typeof(EntityBehaviorInterpolatePosition));
+        api.RegisterEntityBehaviorClass("interpolateposition", typeof(EntityInterpolation));
+        //api.RegisterEntityBehaviorClass("interpolateposition", typeof(ChangedBehavior));
+
+        mappings.Remove("passivephysics");
+        mappingsTypeToBehavior.Remove(typeof(EntityBehaviorPassivePhysics));
+        api.RegisterEntityBehaviorClass("passivephysics", typeof(EntityPassivePhysics));
+
+        mappings.Remove("controlledphysics");
+        mappingsTypeToBehavior.Remove(typeof(EntityControlledPhysics));
+        api.RegisterEntityBehaviorClass("controlledphysics", typeof(EntityControlledPhysics));
+
+        mappings.Remove("playerphysics");
+        mappingsTypeToBehavior.Remove(typeof(EntityBehaviorPlayerPhysics));
+        api.RegisterEntityBehaviorClass("playerphysics", typeof(EntityPlayerPhysics));
     }
 
     public override void StartClientSide(ICoreClientAPI api)
@@ -95,6 +111,14 @@ public class NIM : ModSystem
         sapi.Event.PlayerJoin += UpdateTickrates;
 
         sapi.RegisterCommand(new TickrateCommand(this));
+
+        sapi.Event.RegisterGameTickListener((dt) =>
+        {
+            foreach (IPlayer player in sapi.World.AllPlayers)
+            {
+                Console.WriteLine($"{player.Entity.ServerPos.Motion}, {player.PlayerName}");
+            }
+        }, 500);
     }
 
     public void UpdateTickrates(IServerPlayer byPlayer)
@@ -137,14 +161,14 @@ public class NIM : ModSystem
         physicsManager?.Dispose();
     }
 
-    public static void AddPhysicsTickable(ICoreAPI api, PhysicsTickable entityBehavior)
+    public static void AddPhysicsTickable(ICoreAPI api, IPhysicsTickable entityBehavior)
     {
-        api.ModLoader.GetModSystem<NIM>().physicsManager.AddPhysicsTickable(entityBehavior);
+        api.ModLoader.GetModSystem<NIM>().physicsManager.toAdd.Enqueue(entityBehavior);
     }
 
-    public static void RemovePhysicsTickable(ICoreAPI api, PhysicsTickable entityBehavior)
+    public static void RemovePhysicsTickable(ICoreAPI api, IPhysicsTickable entityBehavior)
     {
-        api.ModLoader.GetModSystem<NIM>().physicsManager.RemovePhysicsTickable(entityBehavior);
+        api.ModLoader.GetModSystem<NIM>().physicsManager.toRemove.Enqueue(entityBehavior);
     }
 }
 

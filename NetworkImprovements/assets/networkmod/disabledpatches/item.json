@@ -21,6 +21,7 @@
     "side": "Universal"
   },
   {
+    "comment": "No floating up for items",
     "op": "remove",
     "path": "/client/behaviors/2",
     "file": "game:entities/item",

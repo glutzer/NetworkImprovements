@@ -78,10 +78,8 @@ public class PModuleInLiquid : PModule
         }
 
         //Finally add to motion for this tick
-        pos.Motion.Add(
-            controls.FlyVector.X * (1 + push) * 0.03f,
-            yMotion,
-            controls.FlyVector.Z * (1 + push) * 0.03f
-        );
+        pos.Motion.Add(controls.FlyVector.X * (1 + push) * 0.03f,
+                        yMotion,
+                        controls.FlyVector.Z * (1 + push) * 0.03f);
     }
 }

@@ -3,7 +3,6 @@ using System.Collections.Generic;
 using System.Threading;
 using Vintagestory.API.Client;
 using Vintagestory.API.Common;
-using Vintagestory.API.Common.Entities;
 using Vintagestory.API.Server;
 using Vintagestory.API.Util;
 using Vintagestory.Client.NoObf;
@@ -13,12 +12,17 @@ using Vintagestory.Server;
 /// <summary>
 /// Clients tick on main thread. Server load balances physics.
 /// </summary>
-public class PhysicsManager : LoadBalancedTask
+public class PhysicsManager : LoadBalancedTask, IRenderer
 {
+    public Queue<IPhysicsTickable> toAdd = new();
+    public Queue<IPhysicsTickable> toRemove = new();
+
     //Interval at which physics are ticked
     public float interval = 1 / 30f; //30 UPS
 
     public ICoreAPI api;
+    public ICoreClientAPI capi;
+
     public ClientMain client;
     public ServerMain server;
 
@@ -28,8 +32,12 @@ public class PhysicsManager : LoadBalancedTask
     public float accumulation = 0;
 
     //All tickable behaviors
-    public List<PhysicsTickable> tickables = new();
+    public List<IPhysicsTickable> tickables = new();
     public int tickableCount = 0;
+
+    //Do physics after interpolation has occurred on the client
+    public double RenderOrder => 1;
+    public int RenderRange => 9999;
 
     public PhysicsManager(ICoreAPI api)
     {
@@ -47,26 +55,35 @@ public class PhysicsManager : LoadBalancedTask
         if (api is ICoreClientAPI capi)
         {
             client = capi.World as ClientMain;
-            listener = client.RegisterGameTickListener(ClientTick, 10);
+
+            this.capi = capi;
+
+            capi.Event.RegisterRenderer(this, EnumRenderStage.Before);
         }
     }
 
     /// <summary>
     /// Adds something with physics to be ticked.
     /// </summary>
-    public void AddPhysicsTickable(PhysicsTickable entityBehavior)
+    public void AddPhysicsTickables()
     {
-        tickables.Add(entityBehavior);
-        tickableCount = tickables.Count;
+        while (toAdd.Count > 0)
+        {
+            tickables.Add(toAdd.Dequeue());
+            tickableCount = tickables.Count;
+        }
     }
 
     /// <summary>
     /// Remove a tickable when entity despawns.
     /// </summary>
-    public void RemovePhysicsTickable(PhysicsTickable entityBehavior)
+    public void RemovePhysicsTickables()
     {
-        tickables.Remove(entityBehavior);
-        tickableCount = tickables.Count;
+        while (toRemove.Count > 0)
+        {
+            tickables.Remove(toRemove.Dequeue());
+            tickableCount = tickables.Count;
+        }
     }
 
     /// <summary>
@@ -74,31 +91,40 @@ public class PhysicsManager : LoadBalancedTask
     /// </summary>
     public void ServerTick(float dt)
     {
+        AddPhysicsTickables();
+        RemovePhysicsTickables();
+
         accumulation += dt;
 
-        if (accumulation > 5000)
+        if (accumulation > 1000)
         {
-            accumulation -= 5000;
-            ServerMain.Logger.Warning("Skipping 5000ms of physics ticks. Overloaded.");
+            accumulation = 0;
+            ServerMain.Logger.Warning("Skipping 1000ms of physics ticks. Overloaded.");
         }
 
-        while (accumulation >= interval)
+        while (accumulation > interval)
         {
             accumulation -= interval;
             DoServerTick();
         }
     }
 
-    public void ClientTick(float dt)
+    public void OnRenderFrame(float dt, EnumRenderStage stage)
     {
+        AddPhysicsTickables();
+        RemovePhysicsTickables();
+
+        if (capi.IsGamePaused) return;
+
         accumulation += dt;
 
-        if (accumulation > 5000)
+        if (accumulation > 1000)
         {
-            accumulation -= 5000;
+            //Skip ticks
+            accumulation = 0;
         }
 
-        while (accumulation >= interval)
+        while (accumulation > interval)
         {
             accumulation -= interval;
             DoClientTick();
@@ -109,11 +135,10 @@ public class PhysicsManager : LoadBalancedTask
     {
         if (tickableCount == 0) return;
 
-        //Load balances DoWork
         loadBalancer.SynchroniseWorkToMainThread();
 
         //Processes post-ticks at a thread-safe level
-        foreach (PhysicsTickable tickable in tickables)
+        foreach (IPhysicsTickable tickable in tickables)
         {
             tickable.FlagTickDone = 0;
 
@@ -132,13 +157,13 @@ public class PhysicsManager : LoadBalancedTask
     {
         if (tickableCount == 0) return;
 
-        foreach (PhysicsTickable tickable in tickables)
+        foreach (IPhysicsTickable tickable in tickables)
         {
             tickable.OnPhysicsTick(interval);
         }
 
         //Processes post-ticks at a thread-safe level
-        foreach (PhysicsTickable tickable in tickables)
+        foreach (IPhysicsTickable tickable in tickables)
         {
             tickable.FlagTickDone = 0;
             tickable.AfterPhysicsTick(interval);
@@ -147,7 +172,7 @@ public class PhysicsManager : LoadBalancedTask
 
     public void DoWork()
     {
-        foreach (PhysicsTickable tickable in tickables)
+        foreach (IPhysicsTickable tickable in tickables)
         {
             if (AsyncHelper.CanProceedOnThisThread(ref tickable.FlagTickDone))
             {
@@ -192,15 +217,15 @@ public class PhysicsManager : LoadBalancedTask
     /// </summary>
     public void Dispose()
     {
-        tickables.Clear();
-
         if (api is ICoreServerAPI)
         {
             server.UnregisterGameTickListener(listener);
         }
         else
         {
-            client.UnregisterGameTickListener(listener);
+            (client.Api as ICoreClientAPI).Event.UnregisterRenderer(this, EnumRenderStage.Before);
         }
+
+        tickables.Clear(); //Might cause an error
     }
 }

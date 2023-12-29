@@ -1,4 +1,4 @@
-﻿public interface PhysicsTickable
+﻿public interface IPhysicsTickable
 {
     /// <summary>
     /// Flag for load balancer.

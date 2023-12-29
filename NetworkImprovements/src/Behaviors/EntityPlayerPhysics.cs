@@ -5,6 +5,7 @@ using Vintagestory.API.Common.Entities;
 using Vintagestory.API.Config;
 using Vintagestory.API.Datastructures;
 using Vintagestory.API.MathTools;
+using Vintagestory.API.Server;
 
 /// <summary>
 /// Client-side player physics.
@@ -13,6 +14,7 @@ using Vintagestory.API.MathTools;
 /// </summary>
 public class EntityPlayerPhysics : EntityControlledPhysics, IRenderer
 {
+    public IPlayer player;
     public EntityPlayer entityPlayer;
     public ICoreClientAPI capi;
 
@@ -24,104 +26,114 @@ public class EntityPlayerPhysics : EntityControlledPhysics, IRenderer
 
     public override void Initialize(EntityProperties properties, JsonObject attributes)
     {
-        (entity.Api as ICoreClientAPI)?.Event.RegisterRenderer(this, EnumRenderStage.Before, "playerphysics");
-        base.Initialize(properties, attributes);
+        SetModules();
+
+        stepHeight = attributes["stepHeight"].AsFloat(0.6f);
+
+        JsonObject physics = properties?.Attributes?["physics"];
+        for (int i = 0; i < physicsModules.Count; i++)
+        {
+            physicsModules[i].Initialize(physics, entity);
+        }
+
+        sneakTestCollisionbox = entity.CollisionBox.Clone().OmniNotDownGrowBy(-0.1f);
+        sneakTestCollisionbox.Y2 /= 2;
+
+        if (entity.Api.Side == EnumAppSide.Client)
+        {
+            if (capi.World.Player == null || capi.World.Player.Entity == entity)
+            {
+                remote = false;
+            }
+        }
+
+        if (remote)
+        {
+            NIM.AddPhysicsTickable(api, this);
+        }
+        else
+        {
+            (entity.Api as ICoreClientAPI)?.Event.RegisterRenderer(this, EnumRenderStage.Before, "playerphysics");
+        }
+
+        smoothStepping = !remote;
     }
 
     public override void SetModules()
     {
+        physicsModules.Add(new PModuleWind());
         physicsModules.Add(new PModuleOnGround());
         physicsModules.Add(new PlayerInLiquid(entityPlayer));
         physicsModules.Add(new PlayerInAir());
         physicsModules.Add(new PModuleGravity());
         physicsModules.Add(new PModuleMotionDrag());
+        physicsModules.Add(new PModuleKnockback());
     }
 
-    //Player movement is fixed interval like vanilla for now
-    public float accum = 0;
-
+    //Called 30 times/s remotely. Every frame on client.
     public override void OnPhysicsTick(float dt)
     {
+        if (entity.State != EnumEntityState.Active) return;
+
+        player ??= entityPlayer.Player;
+
+        if (player == null) return;
+
+        if (double.IsNaN(entity.SidedPos.Y)) return;
+
+        if (entity.World.Side == EnumAppSide.Server && ((IServerPlayer)player).ConnectionState != EnumClientState.Playing) return;
+
+        float dtFactor = dt * 60;
+
         traversed.Clear();
 
-        //Update wind value every 20 ticks
-        tickCounter++;
-        if (tickCounter % 100 == 0)
+        collisionTester ??= new CachingCollisionTester();
+        collisionTester.NewTick();
+
+        //Adjust collision box of dead entities
+        if (!entity.Alive) AdjustCollisionBoxToAnimation(dtFactor);
+
+        //Get controls
+        EntityControls controls = ((EntityAgent)entity).Controls;
+
+        //Pre-physics
+        IClientWorldAccessor clientWorld = entity.World as IClientWorldAccessor;
+        controls.IsFlying = player.WorldData.FreeMove || (clientWorld != null && clientWorld.Player.ClientId != player.ClientId);
+        controls.NoClip = player.WorldData.NoClip;
+        controls.MovespeedMultiplier = player.WorldData.MoveSpeedMultiplier;
+
+        if (controls.Gliding)
         {
-            if (tickCounter == 500) tickCounter = 0;
+            controls.IsFlying = true;
         }
 
-        accum += dt;
-        if (accum > 1)
+        //Get pos, last pos on server and client pos on client
+        EntityPos pos;
+        if (remote)
         {
-            accum = 1;
-        }
-
-        //Always self now
-        float frameTime = 1 / 60f;
-        smoothStepping = true;
-
-        if (accum >= frameTime)   // Only do this code section if we will actually be ticking TickEntityPhysicsPre
-        {
-            SetupKnockbackValues();
-
-            collisionTester ??= new CachingCollisionTester();
-            collisionTester.NewTick();
-
-            while (accum >= frameTime)
+            lPos ??= new()
             {
-                FixedIntervalTick(entity, frameTime);
-                accum -= frameTime;
-            }
+                X = entity.SidedPos.X,
+                Y = entity.SidedPos.Y,
+                Z = entity.SidedPos.Z
+            };
+            pos = lPos;
         }
-
-        entity.PhysicsUpdateWatcher?.Invoke(accum, prevPos);
-
-        //Glider stuff?
-        IPlayer player = entityPlayer.Player;
-        EntityControls controls = entityPlayer.Controls;
-        if (player != null && controls.Gliding)
+        else
         {
-            if (entity.Collided || entity.FeetInLiquid || !entity.Alive || player.WorldData.FreeMove)
-            {
-                controls.GlideSpeed = 0;
-                controls.Gliding = false;
-                controls.IsFlying = false;
-                entityPlayer.WalkPitch = 0;
-            }
-        }
-    }
-
-    public void FixedIntervalTick(Entity entity, float dt)
-    {
-        prevPos.Set(entity.Pos.X, entity.Pos.Y, entity.Pos.Z);
-        EntityControls controls = entityPlayer.Controls;
-        IClientPlayer player = entityPlayer.Player as IClientPlayer;
-
-        //More glider stuff
-        if (player != null)
-        {
-            IClientWorldAccessor clientWorld = entity.World as IClientWorldAccessor;
-
-            controls.IsFlying = player.WorldData.FreeMove || (clientWorld != null && clientWorld.Player.ClientId != player.ClientId);
-            controls.NoClip = player.WorldData.NoClip;
-            controls.MovespeedMultiplier = player.WorldData.MoveSpeedMultiplier;
-
-            if (player != null && controls.Gliding) controls.IsFlying = true;
+            pos = entity.SidedPos;
         }
 
-        EntityPos pos = entity.Pos;
-
-        //If trying to move or gliding
-        if (controls.TriesToMove || controls.Gliding)
+        //If trying to glide or move update controls
+        if ((controls.TriesToMove || controls.Gliding) && player is IClientPlayer clientPlayer)
         {
             float prevYaw = pos.Yaw;
-            pos.Yaw = capi.Input.MouseYaw;
+            pos.Yaw = (entity.Api as ICoreClientAPI).Input.MouseYaw;
 
             if (entity.Swimming || controls.Gliding)
             {
                 float prevPitch = pos.Pitch;
-                pos.Pitch = player.CameraPitch;
+                pos.Pitch = clientPlayer.CameraPitch;
                 controls.CalcMovementVectors(pos, dt);
                 pos.Yaw = prevYaw;
                 pos.Pitch = prevPitch;
@@ -133,6 +145,7 @@ public class EntityPlayerPhysics : EntityControlledPhysics, IRenderer
             }
 
             float desiredYaw = (float)Math.Atan2(controls.WalkVector.X, controls.WalkVector.Z) - GameMath.PIHALF;
+
             float yawDist = GameMath.AngleRadDistance(entityPlayer.WalkYaw, desiredYaw);
             entityPlayer.WalkYaw += GameMath.Clamp(yawDist, -6 * dt * GlobalConstants.OverallSpeedMultiplier, 6 * dt * GlobalConstants.OverallSpeedMultiplier);
             entityPlayer.WalkYaw = GameMath.Mod(entityPlayer.WalkYaw, GameMath.TWOPI);
@@ -149,12 +162,15 @@ public class EntityPlayerPhysics : EntityControlledPhysics, IRenderer
                 entityPlayer.WalkPitch = 0;
             }
         }
-        else //If not moving
+        else
         {
             if (!entity.Swimming && !controls.Gliding) entityPlayer.WalkPitch = 0;
-            else if (entity.OnGround && entityPlayer.WalkPitch != 0)
+            else if (entity.OnGround && entityPlayer.WalkPitch != 0 && player is IClientPlayer)
             {
-                if (entityPlayer.WalkPitch < 0.01f || entityPlayer.WalkPitch > GameMath.TWOPI - 0.01f) entityPlayer.WalkPitch = 0;
+                if (entityPlayer.WalkPitch < 0.01f || entityPlayer.WalkPitch > GameMath.TWOPI - 0.01f)
+                {
+                    entityPlayer.WalkPitch = 0;
+                }
                 else
                 {   //Slowly revert player to upright position if feet touched the bottom of water
                     entityPlayer.WalkPitch = GameMath.Mod(entityPlayer.WalkPitch, GameMath.TWOPI);
@@ -167,14 +183,81 @@ public class EntityPlayerPhysics : EntityControlledPhysics, IRenderer
             pos.Yaw = prevYaw;
         }
 
-        TickEntityPhysics(pos, controls, dt);
+        if (remote)
+        {
+            RemoteMotion(dt);
+        }
+        else
+        {
+            MainMotion(pos, controls, dt);
+        }
+
+        //If the agent is mounted on something, set the position to what it's mounted on and return
+        EntityAgent agent = entity as EntityAgent;
+        if (agent?.MountedOn != null)
+        {
+            entity.Swimming = false;
+            entity.OnGround = false;
+
+            pos.SetPos(agent.MountedOn.MountPosition);
+
+            pos.Motion.X = 0;
+            pos.Motion.Y = 0;
+            pos.Motion.Z = 0;
+            return;
+        }
+
+        CollideAndMove(pos, controls, dt, dtFactor);
+
+        if (player != null && controls.Gliding)
+        {
+            if (entity.Collided || entity.FeetInLiquid || !entity.Alive || player.WorldData.FreeMove)
+            {
+                controls.GlideSpeed = 0;
+                controls.Gliding = false;
+                controls.IsFlying = false;
+                entityPlayer.WalkPitch = 0;
+            }
+        }
+
+        //The last tested pos is now the location the entity is at this tick
+        if (remote)
+        {
+            if (prevPos.X != entity.SidedPos.X || prevPos.Y != entity.SidedPos.Y || prevPos.Z != entity.SidedPos.Z)
+            {
+                lPos.X = entity.SidedPos.X;
+                lPos.Y = entity.SidedPos.Y;
+                lPos.Z = entity.SidedPos.Z;
+            }
+        }
     }
 
+    //60/s client-side updates
+    public float accum = 0;
+    public float interval = 1 / 60f;
+
+    /// <summary>
+    /// Do physics every frame on the client.
+    /// </summary>
     public void OnRenderFrame(float dt, EnumRenderStage stage)
     {
         if (capi.IsGamePaused) return;
 
-        OnPhysicsTick(dt);
+        accum += dt;
+
+        if (accum > 5000)
+        {
+            accum = 0;
+        }
+
+        while (accum >= interval)
+        {
+            OnPhysicsTick(interval);
+            accum -= interval;
+        }
+
+        entity.PhysicsUpdateWatcher?.Invoke(accum, prevPos);
+
         AfterPhysicsTick(dt);
     }
 

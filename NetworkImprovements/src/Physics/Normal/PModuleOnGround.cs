@@ -52,21 +52,27 @@ public class PModuleOnGround : PModule
 
             if (entity.Alive)
             {
-                // pply walk motion
+                //Apply walk motion
                 double multiplier = (entity as EntityAgent).GetWalkSpeedMultiplier(groundDragFactor);
 
-                motionDelta.Set(    motionDelta.X + (controls.WalkVector.X * multiplier - motionDelta.X) * belowBlock.DragMultiplier,
-                                    0,
-                                    motionDelta.Z + (controls.WalkVector.Z * multiplier - motionDelta.Z) * belowBlock.DragMultiplier);
+                motionDelta.Set(motionDelta.X + (controls.WalkVector.X * multiplier - motionDelta.X) * belowBlock.DragMultiplier,
+                                0,
+                                motionDelta.Z + (controls.WalkVector.Z * multiplier - motionDelta.Z) * belowBlock.DragMultiplier);
 
-                pos.Motion.Add(motionDelta.X, 0, motionDelta.Z);
+                if (entity.OnGround)
+                {
+                    pos.Motion.Add(motionDelta.X, 0, motionDelta.Z);
+                }
             }
 
             //Apply ground drag
-            double dragStrength = 1 - groundDragFactor;
+            if (entity.OnGround)
+            {
+                double dragStrength = 1 - groundDragFactor;
 
-            pos.Motion.X *= dragStrength;
-            pos.Motion.Z *= dragStrength;
+                pos.Motion.X *= dragStrength;
+                pos.Motion.Z *= dragStrength;
+            }
         }
 
         //Only able to jump every 500ms. Only works while on the ground

@@ -51,8 +51,13 @@ public class EntityInterpolation : EntityBehavior, IRenderer
         if (entity.World.Side == EnumAppSide.Server) throw new Exception($"Remove server interpolaton behavior from {entity.Code.Path}.");
         capi = entity.Api as ICoreClientAPI;
 
-        if (capi.World.Player != null) capi.Event.RegisterRenderer(this, EnumRenderStage.Before, "interpolateposition");
         //Client player initializes before everything else
+        if (capi.World.Player != null && entity != capi.World.Player.Entity)
+        {
+            
+        }
+
+        capi.Event.RegisterRenderer(this, EnumRenderStage.Before, "interpolateposition");
     }
 
     public PositionSnapshot p0; //Position interpolating from
@@ -68,20 +73,35 @@ public class EntityInterpolation : EntityBehavior, IRenderer
     public override void Initialize(EntityProperties properties, JsonObject attributes)
     {
         //Initialize projectile lerps at right hand of the player
-        if (entity is EntityProjectile proj)
+        if (entity is EntityProjectile proj && proj.FiredBy != null)
         {
-            EntityPos newPos = capi.World.Player.Entity.Pos.Copy();
+            EntityPos newPos = proj.FiredBy.Pos.Copy();
             
             newPos.Yaw = proj.ServerPos.Yaw;
             newPos.Pitch = proj.ServerPos.Pitch;
             newPos.Roll = proj.ServerPos.Roll;
-            newPos.Y += capi.World.Player.Entity.LocalEyePos.Y - 0.25f;
+            newPos.Y += proj.FiredBy.LocalEyePos.Y - 0.3f;
 
-            newPos.X -= Math.Sin(capi.World.Player.Entity.Pos.Yaw) * 0.25f;
-            newPos.Z -= Math.Cos(capi.World.Player.Entity.Pos.Yaw) * 0.25f;
+            newPos.X += Math.Sin(newPos.Yaw) * 0.3f;
+            newPos.Z += Math.Cos(newPos.Yaw) * 0.3f;
 
             p2 = new PositionSnapshot(newPos, 0.75f);
-            lastReceived = capi.InWorldEllapsedMilliseconds - 150; //150ms delay for arrow simulation
+            lastReceived = capi.InWorldEllapsedMilliseconds - 100; //Delay for arrow
+        }
+        else if (entity is EntityThrownStone stone && stone.FiredBy != null)
+        {
+            EntityPos newPos = stone.FiredBy.Pos.Copy();
+
+            newPos.Yaw = stone.ServerPos.Yaw;
+            newPos.Pitch = stone.ServerPos.Pitch;
+            newPos.Roll = stone.ServerPos.Roll;
+            newPos.Y += stone.FiredBy.LocalEyePos.Y - 0.3f;
+
+            newPos.X += Math.Sin(newPos.Yaw) * 0.3f;
+            newPos.Z += Math.Cos(newPos.Yaw) * 0.3f;
+
+            p2 = new PositionSnapshot(newPos, 0.75f);
+            lastReceived = capi.InWorldEllapsedMilliseconds - 100; //Delay for stone, since first received pos also contains motion this needs to be backwards calculated instead of a flat 100
         }
         else
         {
@@ -107,7 +127,7 @@ public class EntityInterpolation : EntityBehavior, IRenderer
                 p1.LerpTo(p0, delta); //Lerp to 0 by how much is left
                 p2.interval += inverseInterval * 0.99f; //Add time missed with slight compensation
 
-                if (p2.interval > 0.5f)
+                if (p2.interval > 0.15f) //Fix lingering intervals
                 {
                     p2.interval = 0;
                 }
@@ -138,11 +158,15 @@ public class EntityInterpolation : EntityBehavior, IRenderer
     {
         if (capi.IsGamePaused) return;
 
+        if (entity == capi.World.Player.Entity) return;
+
         if (p0 == null)
         {
-            entity.Pos.Y = 1000;
+            entity.Pos.Y = 500;
             return;
         }
+
+        accum += dt;
 
         //Don't interpolate mount if the player is controlling it because player controlled mounts are done client-side
         bool isMounted = entity is EntityAgent { MountedOn: not null };
@@ -157,6 +181,7 @@ public class EntityInterpolation : EntityBehavior, IRenderer
             }
         }
 
+        //If the entity is mounted on something
         if (accum < p1.interval)
         {
             float delta = accum / p1.interval;
@@ -167,12 +192,11 @@ public class EntityInterpolation : EntityBehavior, IRenderer
                 entity.Pos.Y = GameMath.Lerp(p0.y, p1.y, delta);
                 entity.Pos.Z = GameMath.Lerp(p0.z, p1.z, delta);
             }
-            
-            //entity.Pos.Yaw = GameMath.Lerp(p0.yaw, p1.yaw, delta);
+
             entity.Pos.Pitch = GameMath.Lerp(p0.pitch, p1.pitch, delta);
             entity.Pos.Roll = GameMath.Lerp(p0.roll, p1.roll, delta);
         }
-        else
+        else if (accum < p2.interval)
         {
             float delta = (accum - p1.interval) / p2.interval;
 
@@ -183,7 +207,6 @@ public class EntityInterpolation : EntityBehavior, IRenderer
                 entity.Pos.Z = GameMath.Lerp(p1.z, p2.z, delta);
             }
 
-            //entity.Pos.Yaw = GameMath.Lerp(p1.yaw, p2.yaw, delta);
             entity.Pos.Pitch = GameMath.Lerp(p1.pitch, p2.pitch, delta);
             entity.Pos.Roll = GameMath.Lerp(p1.roll, p2.roll, delta);
         }
@@ -195,7 +218,7 @@ public class EntityInterpolation : EntityBehavior, IRenderer
         currentYaw %= GameMath.TWOPI;
         entity.Pos.Yaw = currentYaw;
 
-        //Change this to store the data like yaw
+        //Entity agent rotations need to be lerped here too, I didn't finish this
         if (entity is EntityAgent entityAgent)
         {
             double percentBodyYawDiff = Math.Abs(GameMath.AngleRadDistance(entityAgent.BodyYaw, entityAgent.BodyYawServer)) * dt / 0.1f;
@@ -203,8 +226,6 @@ public class EntityInterpolation : EntityBehavior, IRenderer
             entityAgent.BodyYaw += 0.6f * (float)GameMath.Clamp(GameMath.AngleRadDistance(entityAgent.BodyYaw, entityAgent.BodyYawServer), -signBY * percentBodyYawDiff, signBY * percentBodyYawDiff);
             entityAgent.BodyYaw %= GameMath.TWOPI;
         }
-
-        accum += dt;
     }
 
     public override string PropertyName()
@@ -215,16 +236,6 @@ public class EntityInterpolation : EntityBehavior, IRenderer
     public override void OnEntityDespawn(EntityDespawnData despawn)
     {
         capi.Event.UnregisterRenderer(this, EnumRenderStage.Before);
-    }
-
-    //Not using this right now
-    public Vec3d LerpPositions()
-    {
-        double[] intervals = new double[] { 0, p1.interval, p2.interval, p2.interval };
-
-        return new Vec3d(GameMath.CPCatmullRomSplineLerp(accum, new double[] { p0.x, p1.x, p2.x, p2.x }, intervals),
-                         GameMath.CPCatmullRomSplineLerp(accum, new double[] { p0.y, p1.y, p2.y, p2.y }, intervals),
-                         GameMath.CPCatmullRomSplineLerp(accum, new double[] { p0.z, p1.z, p2.z, p2.z }, intervals));
     }
 
     public void Dispose()
