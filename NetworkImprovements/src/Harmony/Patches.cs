@@ -1,13 +1,54 @@
 ﻿using HarmonyLib;
+using ProperVersion;
+using System.Runtime.CompilerServices;
 using Vintagestory.API.Client;
 using Vintagestory.API.Common;
 using Vintagestory.API.Common.Entities;
 using Vintagestory.API.MathTools;
 using Vintagestory.GameContent;
+using Vintagestory.Server;
 
 public class Patches
 {
-    //Nametags and some positions break if the position is set here. I tried calling renderframe after received server pos in interpolation but it didn't help.
+    // Postfix of the server receiving the client's position. Will call something in player physics.
+    [HarmonyPatch(typeof(ServerSystemEntitySimulation), "HandlePlayerPosition")]
+    public static class PacketPostfix1
+    {
+        [HarmonyPostfix]
+        public static void Postfix(Packet_Client packet, ConnectedClient client)
+        {
+            //client.Player.Entity.GetBehavior<EntityPlayerPhysics>().OnReceivedClientPos();
+        }
+    }
+
+    // Set delta here in a patch.
+    public static float dt = 0;
+    [HarmonyPatch(typeof(ServerSystemEntitySimulation), "UpdateEvery200ms")]
+    public static class PacketPrefix2
+    {
+        [HarmonyPostfix]
+        public static void Prefix(float dt)
+        {
+            Patches.dt = dt;
+        }
+    }
+
+    [HarmonyPatch(typeof(ServerSystemEntitySimulation), "SendEntityAttributeUpdates")]
+    public static class PacketPrefix3
+    {
+        [HarmonyPostfix]
+        public static void Prefix(ServerSystemEntitySimulation __instance)
+        {
+            // Set watched attribute on player dt float.
+            // Now in receivedServerPos I can get the delta of the new value from the player.
+            foreach (ConnectedClient client in __instance.GetField<ServerMain>("server").Clients.Values)
+            {
+                client?.Player?.Entity?.WatchedAttributes.SetFloat("lastDelta", dt);
+            }
+        }
+    }
+
+    // Nametags and some positions break if the position is set here. I tried calling renderframe after received server pos in interpolation but it didn't help.
     [HarmonyPatch(typeof(Entity), "OnReceivedServerPos")]
     public static class MovedPrefix
     {
@@ -150,7 +191,7 @@ public class Patches
             entity.LocalEyePos.Y = entity.Properties.EyeHeight;
             entity.CallMethod("TriggerOnInitialized");
 
-            //Projectile initializer here
+            // Projectile initializer here.
             entity.SetField("msLaunch", entity.World.ElapsedMilliseconds);
             entity.SetField("collisionTestBox", entity.SelectionBox.Clone().OmniGrowBy(0.05f));
             entity.GetBehavior<EntityPassivePhysics>().OnPhysicsTickCallback = (accum) => entity.CallMethod("onPhysicsTickCallback", accum);
@@ -260,7 +301,7 @@ public class Patches
             entity.LocalEyePos.Y = entity.Properties.EyeHeight;
             entity.CallMethod("TriggerOnInitialized");
 
-            //Projectile initializer here
+            // Projectile initializer here.
             entity.SetField("msLaunch", entity.World.ElapsedMilliseconds);
             if (entity.ProjectileStack?.Collectible != null)
             {

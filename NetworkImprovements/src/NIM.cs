@@ -4,10 +4,8 @@ using System;
 using System.Collections.Generic;
 using Vintagestory.API.Client;
 using Vintagestory.API.Common;
-using Vintagestory.API.Common.Entities;
 using Vintagestory.API.Server;
 using Vintagestory.API.Util;
-using Vintagestory.Client;
 using Vintagestory.Client.NoObf;
 using Vintagestory.Common;
 using Vintagestory.GameContent;
@@ -46,7 +44,6 @@ public class NIM : ModSystem
         mappings.Remove("interpolateposition");
         mappingsTypeToBehavior.Remove(typeof(EntityBehaviorInterpolatePosition));
         api.RegisterEntityBehaviorClass("interpolateposition", typeof(EntityInterpolation));
-        //api.RegisterEntityBehaviorClass("interpolateposition", typeof(ChangedBehavior));
 
         mappings.Remove("passivephysics");
         mappingsTypeToBehavior.Remove(typeof(EntityBehaviorPassivePhysics));
@@ -56,9 +53,15 @@ public class NIM : ModSystem
         mappingsTypeToBehavior.Remove(typeof(EntityControlledPhysics));
         api.RegisterEntityBehaviorClass("controlledphysics", typeof(EntityControlledPhysics));
 
+        // Used for falling blocks. Clean these up.
+        api.RegisterEntityBehaviorClass("legacyinterpolateposition", typeof(EntityBehaviorInterpolatePosition));
+        api.RegisterEntityBehaviorClass("legacypassivephysics", typeof(EntityBehaviorPassivePhysics));
+
+        /*
         mappings.Remove("playerphysics");
         mappingsTypeToBehavior.Remove(typeof(EntityBehaviorPlayerPhysics));
         api.RegisterEntityBehaviorClass("playerphysics", typeof(EntityPlayerPhysics));
+        */
     }
 
     public override void StartClientSide(ICoreClientAPI api)
@@ -180,7 +183,7 @@ public class TickrateMessage
 
 public class TickrateCommand : ServerChatCommand
 {
-    NIM nim;
+    public NIM nim;
 
     public TickrateCommand(NIM nim)
     {
