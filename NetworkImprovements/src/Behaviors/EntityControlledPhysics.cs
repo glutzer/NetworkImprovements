@@ -92,10 +92,12 @@ public class EntityControlledPhysics : EntityBehavior, IPhysicsTickable
 
         isMountable = entity is IMountable || entity is IMountableSupplier;
 
-        if (entity.Api is ICoreClientAPI capi) this.capi = capi;
-        if (entity.Api is ICoreServerAPI sapi) this.sapi = sapi;
+        if (entity.Api is ICoreClientAPI) capi = entity.Api as ICoreClientAPI;
+        if (entity.Api is ICoreServerAPI) sapi = entity.Api as ICoreServerAPI;
 
-        if (this.capi != null) lastReceived = this.capi.InWorldEllapsedMilliseconds;
+        if (capi != null) lastReceived = capi.InWorldEllapsedMilliseconds;
+
+        entity.PhysicsUpdateWatcher?.Invoke(0, entity.ServerPos.XYZ);
     }
 
     public override void OnReceivedServerPos(bool isTeleport, ref EnumHandling handled)
@@ -183,9 +185,10 @@ public class EntityControlledPhysics : EntityBehavior, IPhysicsTickable
         if (double.IsNaN(entity.SidedPos.Y)) return;
 
         EntityPos pos = entity.SidedPos;
-        prevPos.Set(pos);
         EntityControls controls = ((EntityAgent)entity).Controls;
 
+        prevPos.Set(pos);
+        
         EntityAgent agent = entity as EntityAgent;
         if (agent?.MountedOn != null)
         {
@@ -197,6 +200,7 @@ public class EntityControlledPhysics : EntityBehavior, IPhysicsTickable
             pos.Motion.X = 0;
             pos.Motion.Y = 0;
             pos.Motion.Z = 0;
+
             return;
         }
 
@@ -211,7 +215,7 @@ public class EntityControlledPhysics : EntityBehavior, IPhysicsTickable
     {
         if (entity.State != EnumEntityState.Active) return;
 
-        //Call OnEntityInside events
+        // Call OnEntityInside events.
         IBlockAccessor blockAccessor = entity.World.BlockAccessor;
         tmpPos.Set(-1, -1, -1);
         Block block = null;
@@ -229,12 +233,20 @@ public class EntityControlledPhysics : EntityBehavior, IPhysicsTickable
     public void ApplyTests(EntityPos pos, EntityControls controls, float dt)
     {
         IBlockAccessor blockAccessor = entity.World.BlockAccessor;
-        
-        bool falling = prevYMotion < 0;
+
+        prevYMotion = pos.Motion.Y;
+
         float dtFactor = dt * 60;
 
         moveDelta.Set(pos.Motion.X * dtFactor, prevYMotion * dtFactor, pos.Motion.Z * dtFactor);
         nextPos.Set(pos.X + moveDelta.X, pos.Y + moveDelta.Y, pos.Z + moveDelta.Z);
+
+        bool falling = prevYMotion < 0;
+
+        if (pos.Motion.Y > 0)
+        {
+            int test = 1;
+        }
 
         controls.IsClimbing = false;
         entity.ClimbingOnFace = null;

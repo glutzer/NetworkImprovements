@@ -4,9 +4,6 @@ using Vintagestory.API.Common.Entities;
 using Vintagestory.API.Datastructures;
 using Vintagestory.API.MathTools;
 
-/// <summary>
-/// Move entity by wind.
-/// </summary>
 public class PModuleWind : PModule
 {
     public Vec3d windForce = new();
@@ -20,11 +17,13 @@ public class PModuleWind : PModule
 
     public override bool Applicable(Entity entity, EntityPos pos, EntityControls controls)
     {
+        // Applies if trying to walk on the surface.
         return controls.TriesToMove && entity.OnGround && !entity.Swimming;
     }
 
     public override void DoApply(float dt, Entity entity, EntityPos pos, EntityControls controls)
     {
+        // Update wind force every second and apply the motion to the entity.
         accum += dt;
         if (accum > 1)
         {

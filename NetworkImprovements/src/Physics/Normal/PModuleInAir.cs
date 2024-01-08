@@ -42,7 +42,7 @@ public class PModuleInAir : PModule
 
     public virtual void ApplyFreeFall(float dt, Entity entity, EntityPos pos, EntityControls controls)
     {
-        //Ladder motion
+        // Ladder motion.
         if (controls.IsClimbing)
         {
             pos.Motion.Add(controls.WalkVector);
@@ -50,7 +50,7 @@ public class PModuleInAir : PModule
             pos.Motion.Y *= Math.Pow(1 - wallDragFactor, dt * 60);
             pos.Motion.Z *= Math.Pow(1 - wallDragFactor, dt * 60);
         }
-        else //Try to move around in the air very slowly as if walking
+        else // Try to move around in the air very slowly as if walking.
         {
             float strength = airMovingStrength * dt * 60f;
             pos.Motion.Add(controls.WalkVector.X * strength, controls.WalkVector.Y * strength, controls.WalkVector.Z * strength);
@@ -68,7 +68,7 @@ public class PModuleInAir : PModule
             float moveSpeed = dt * GlobalConstants.BaseMoveSpeed * controls.MovespeedMultiplier / 2;
             deltaY = (controls.Up ? moveSpeed : 0) + (controls.Down ? -moveSpeed : 0);
         }
-        if (deltaY > 0 && pos.Y % BlockPos.DimensionBoundary > BlockPos.DimensionBoundary * 3 / 4) deltaY = 0; //Prevent entities from flying too close to dimension boundaries
+        if (deltaY > 0 && pos.Y % BlockPos.DimensionBoundary > BlockPos.DimensionBoundary * 3 / 4) deltaY = 0; // Prevent entities from flying too close to dimension boundaries.
 
         pos.Motion.Add(controls.FlyVector.X, deltaY, controls.FlyVector.Z);
     }

@@ -6,7 +6,6 @@ using Vintagestory.API.Config;
 using Vintagestory.API.Datastructures;
 using Vintagestory.API.MathTools;
 using Vintagestory.API.Server;
-using Vintagestory.Client.NoObf;
 
 /// <summary>
 /// Passive physics rewritten to not be render-based but tick based on both the server and client.
@@ -71,7 +70,8 @@ public class EntityPassivePhysics : EntityBehavior, IPhysicsTickable
         // Set ground drag.
         groundDragValue = 0.3 * attributes["groundDragFactor"].AsDouble(1);
 
-        gravityPerSecond *= attributes["gravityFactor"].AsDouble(1); //Gravity
+        // Gravity.
+        gravityPerSecond *= attributes["gravityFactor"].AsDouble(1);
         if (entity.WatchedAttributes.HasAttribute("gravityFactor")) gravityPerSecond = GlobalConstants.GravityPerSecond * (float)entity.WatchedAttributes.GetDouble("gravityFactor");
 
         isMountable = entity is IMountable || entity is IMountableSupplier;

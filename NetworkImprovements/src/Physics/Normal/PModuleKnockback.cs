@@ -21,6 +21,7 @@ public class PModuleKnockback : PModule
 
     public override void DoApply(float dt, Entity entity, EntityPos pos, EntityControls controls)
     {
+        // If a knockback is queued to happen apply the motion.
         int knockbackState = entity.Attributes.GetInt("dmgkb");
         if (knockbackState > 0)
         {

@@ -1,10 +1,6 @@
 ﻿using HarmonyLib;
-using ProperVersion;
-using System.Runtime.CompilerServices;
-using Vintagestory.API.Client;
 using Vintagestory.API.Common;
 using Vintagestory.API.Common.Entities;
-using Vintagestory.API.MathTools;
 using Vintagestory.GameContent;
 using Vintagestory.Server;
 
@@ -12,21 +8,21 @@ public class Patches
 {
     // Postfix of the server receiving the client's position. Will call something in player physics.
     [HarmonyPatch(typeof(ServerSystemEntitySimulation), "HandlePlayerPosition")]
-    public static class PacketPostfix1
+    public static class HandlePlayerPositionPostfix
     {
         [HarmonyPostfix]
         public static void Postfix(Packet_Client packet, ConnectedClient client)
         {
-            //client.Player.Entity.GetBehavior<EntityPlayerPhysics>().OnReceivedClientPos();
+            client.Player.Entity.GetBehavior<EntityPlayerPhysics>().OnReceivedClientPos();
         }
     }
 
     // Set delta here in a patch.
     public static float dt = 0;
     [HarmonyPatch(typeof(ServerSystemEntitySimulation), "UpdateEvery200ms")]
-    public static class PacketPrefix2
+    public static class UpdateEvery200msPostfix
     {
-        [HarmonyPostfix]
+        [HarmonyPrefix]
         public static void Prefix(float dt)
         {
             Patches.dt = dt;
@@ -34,9 +30,9 @@ public class Patches
     }
 
     [HarmonyPatch(typeof(ServerSystemEntitySimulation), "SendEntityAttributeUpdates")]
-    public static class PacketPrefix3
+    public static class SendEntityAttributeUpdatesPrefix
     {
-        [HarmonyPostfix]
+        [HarmonyPrefix]
         public static void Prefix(ServerSystemEntitySimulation __instance)
         {
             // Set watched attribute on player dt float.
@@ -74,9 +70,7 @@ public class Patches
         }
     }
 
-    /// <summary>
-    /// Patch this one AI Task to also try to get step height from the new physics.
-    /// </summary>
+    // Patch this one AI Task to also try to get step height from the new physics.
     [HarmonyPatch(typeof(AiTaskBaseTargetable), "StartExecute")]
     public static class StartExecutePostfix
     {
@@ -92,9 +86,7 @@ public class Patches
         }
     }
 
-    /// <summary>
-    /// Override initialize to use new behaviors since I found no easy way to do this.
-    /// </summary>
+    // Override initialize to use new behaviors since I found no easy way to do this.
     [HarmonyPatch(typeof(EntityProjectile), "Initialize")]
     public static class InitializePrefix
     {
@@ -160,7 +152,7 @@ public class Patches
                     if (sizeGrowthFactor != 0f)
                     {
                         EntityClientProperties client = entity.World.GetEntityType(entity.Code).Client;
-                        entity.Properties.Client.Size = client.Size + entity.WatchedAttributes.GetTreeAttribute("grow").GetFloat("age") * sizeGrowthFactor;
+                        entity.Properties.Client.Size = client.Size + (entity.WatchedAttributes.GetTreeAttribute("grow").GetFloat("age") * sizeGrowthFactor);
                     }
                 });
             }
@@ -202,9 +194,7 @@ public class Patches
         }
     }
 
-    /// <summary>
-    /// Override initialize to use new behaviors since I found no easy way to do this.
-    /// </summary>
+    // Override initialize to use new behaviors since I found no easy way to do this.
     [HarmonyPatch(typeof(EntityThrownStone), "Initialize")]
     public static class InitializeStonePrefix
     {
@@ -270,7 +260,7 @@ public class Patches
                     if (sizeGrowthFactor != 0f)
                     {
                         EntityClientProperties client = entity.World.GetEntityType(entity.Code).Client;
-                        entity.Properties.Client.Size = client.Size + entity.WatchedAttributes.GetTreeAttribute("grow").GetFloat("age") * sizeGrowthFactor;
+                        entity.Properties.Client.Size = client.Size + (entity.WatchedAttributes.GetTreeAttribute("grow").GetFloat("age") * sizeGrowthFactor);
                     }
                 });
             }
@@ -309,112 +299,6 @@ public class Patches
             }
 
             entity.GetBehavior<EntityPassivePhysics>().collisionYExtra = 0f;
-
-            return false;
-        }
-    }
-
-    [HarmonyPatch(typeof(EntityBlockFalling), "OnGameTick")]
-    public static class TickPrefix
-    {
-        [HarmonyPrefix]
-        public static bool Prefix(EntityBlockFalling __instance, float dt, ref float ___soundStartDelay, ref ILoadedSound ___sound, ref int ___lingerTicks, ref float ___nowDustIntensity, ref bool ___fallHandled, ref Vec3d ___fallMotion, ref int ___ticksAlive, ref float ___pushaccum)
-        {
-            EntityBlockFalling entity = __instance;
-
-            entity.World.FrameProfiler.Enter("entity-tick-unsstablefalling");
-
-            if (___soundStartDelay > 0)
-            {
-                ___soundStartDelay -= dt;
-                if (___soundStartDelay <= 0)
-                {
-                    ___sound.Start();
-                }
-            }
-
-            ___sound?.SetPosition((float)entity.Pos.X, (float)entity.Pos.Y, (float)entity.Pos.Z);
-
-            if (___lingerTicks > 0)
-            {
-                ___lingerTicks--;
-                if (___lingerTicks == 0)
-                {
-                    if (entity.Api.Side == EnumAppSide.Client && ___sound != null)
-                    {
-                        ___sound.FadeOut(3f, (s) => { s.Dispose(); });
-                    }
-                    entity.Die();
-                }
-
-                return false;
-            }
-
-            if (!entity.Collided && !___fallHandled)
-            {
-                ___nowDustIntensity = 1;
-            }
-            else
-            {
-                ___nowDustIntensity = 0;
-            }
-
-            entity.World.FrameProfiler.Mark("entity-tick-unsstablefalling-sound(etc)");
-
-            ___ticksAlive++;
-            if (___ticksAlive >= 2 || entity.Api.World.Side == EnumAppSide.Client)
-            {
-                if (!entity.InitialBlockRemoved)
-                {
-                    entity.InitialBlockRemoved = true;
-                    entity.CallMethod("UpdateBlock", true, entity.initialPos);
-                }
-
-                foreach (EntityBehavior behavior in entity.SidedProperties.Behaviors)
-                {
-                    behavior.OnGameTick(dt);
-                }
-                entity.World.FrameProfiler.Mark("entity-tick-unsstablefalling-physics(etc)");
-            }
-
-            ___pushaccum += dt;
-            ___fallMotion.X *= 0.99f;
-            ___fallMotion.Z *= 0.99f;
-            if (___pushaccum > 0.2f)
-            {
-                ___pushaccum = 0;
-                if (!entity.Collided)
-                {
-                    Entity[] entities;
-                    if (entity.Api.Side == EnumAppSide.Server)
-                    {
-                        entities = entity.World.GetEntitiesAround(entity.SidedPos.XYZ, 1.1f, 1.1f, (e) => !(e is EntityBlockFalling));
-                    }
-                    else
-                    {
-                        entities = entity.World.GetEntitiesAround(entity.SidedPos.XYZ, 1.1f, 1.1f, (e) => e is EntityPlayer);
-                    }
-                    for (int i = 0; i < entities.Length; i++)
-                    {
-                        entities[i].SidedPos.Motion.Add(___fallMotion.X / 10f, 0, ___fallMotion.Z / 10f);
-                    }
-                }
-            }
-
-            entity.World.FrameProfiler.Mark("entity-tick-unsstablefalling-finalizemotion");
-            if (entity.Api.Side == EnumAppSide.Server && !entity.Collided && entity.World.Rand.NextDouble() < 0.01)
-            {
-                entity.World.BlockAccessor.TriggerNeighbourBlockUpdate(entity.ServerPos.AsBlockPos);
-                entity.World.FrameProfiler.Mark("entity-tick-unsstablefalling-neighborstrigger");
-            }
-
-            if (entity.CollidedVertically && entity.Pos.Motion.Length() == 0)
-            {
-                entity.OnFallToGround(0);
-                entity.World.FrameProfiler.Mark("entity-tick-unsstablefalling-falltoground");
-            }
-
-            entity.World.FrameProfiler.Leave();
 
             return false;
         }

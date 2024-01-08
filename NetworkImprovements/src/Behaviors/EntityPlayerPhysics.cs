@@ -22,23 +22,21 @@ public class EntityPlayerPhysics : EntityControlledPhysics, IRenderer
 
     public override void Initialize(EntityProperties properties, JsonObject attributes)
     {
-        if (entity.Api is ICoreClientAPI capi) this.capi = capi;
-        if (entity.Api is ICoreServerAPI sapi) this.sapi = sapi;
+        if (entity.Api is ICoreClientAPI) capi = entity.Api as ICoreClientAPI;
+        if (entity.Api is ICoreServerAPI) sapi = entity.Api as ICoreServerAPI;
 
         entityPlayer = entity as EntityPlayer;
 
         if (entity.Api.Side == EnumAppSide.Client)
         {
-            //Client player initializes before anything else
-            if (this.capi.World.Player == null || this.capi.World.Player.Entity == entity)
-            {
-                remote = false;
-            }
+            // Remote on server.
+            remote = false;
         }
 
+        // If the controller of the player.
         if (!remote)
         {
-            this.capi.Event.RegisterRenderer(this, EnumRenderStage.Before, "playerphysics");
+            capi.Event.RegisterRenderer(this, EnumRenderStage.Before, "playerphysics");
             SetModules();
         }
 
@@ -57,13 +55,9 @@ public class EntityPlayerPhysics : EntityControlledPhysics, IRenderer
 
         if (remote)
         {
-            if (this.capi != null)
+            if (capi == null)
             {
-                lastReceived = this.capi.InWorldEllapsedMilliseconds;
-            }
-            else
-            {
-                lastReceived = this.sapi.World.ElapsedMilliseconds;
+                lastReceived = sapi.World.ElapsedMilliseconds;
             }
         }
     }
@@ -82,25 +76,30 @@ public class EntityPlayerPhysics : EntityControlledPhysics, IRenderer
     public void OnReceivedClientPos()
     {
         if (!remote) return;
-        HandleRemote(sapi.World.ElapsedMilliseconds);
+
+        float dt = (sapi.World.ElapsedMilliseconds - lastReceived) / 1000f;
+        lastReceived = sapi.World.ElapsedMilliseconds;
+
+        HandleRemote(dt);
     }
 
     public override void OnReceivedServerPos(bool isTeleport, ref EnumHandling handled)
     {
         if (!remote) return;
-        HandleRemote(capi.InWorldEllapsedMilliseconds);
+
+        float dt = capi.World.Player.Entity.WatchedAttributes.GetFloat("lastDelta");
+
+        HandleRemote(dt);
     }
 
-    public void HandleRemote(long ellapsedMs)
+    public void HandleRemote(float dt)
     {
         player ??= entityPlayer.Player;
         if (player == null) return;
 
         if (nPos == null) nPos.Set(entity.SidedPos);
 
-        float dt = (lastReceived - ellapsedMs) / 1000f;
         float dtFactor = dt * 60;
-        lastReceived = ellapsedMs;
 
         lPos.SetFrom(nPos);
         nPos.Set(entity.SidedPos);
@@ -127,6 +126,16 @@ public class EntityPlayerPhysics : EntityControlledPhysics, IRenderer
 
         SetState(lPos, dt);
 
+        // Apply gravity then set collision.
+        /*
+        double gravityStrength = 1 / 60f * dtFactor + Math.Max(0, -0.015f * lPos.Motion.Y * dtFactor);
+        lPos.Motion.Y -= gravityStrength;
+        collisionTester.ApplyTerrainCollision(entity, lPos, dtFactor, ref outPos, 0, 0);
+        bool falling = lPos.Motion.Y < 0;
+        entity.OnGround = entity.CollidedVertically && falling;
+        lPos.Motion.Y += gravityStrength;
+        */
+
         lPos.SetPos(nPos);
 
         EntityControls controls = ((EntityAgent)entity).Controls;
@@ -134,6 +143,7 @@ public class EntityPlayerPhysics : EntityControlledPhysics, IRenderer
         ApplyTests(lPos, controls, dt);
     }
 
+    // Main client physics tick called every frame.
     public override void OnPhysicsTick(float dt)
     {
         if (entity.State != EnumEntityState.Active) return;
@@ -145,6 +155,9 @@ public class EntityPlayerPhysics : EntityControlledPhysics, IRenderer
         EntityControls controls = ((EntityAgent)entity).Controls;
         EntityPos pos = entity.SidedPos;
 
+        prevPos.Set(pos);
+
+        // If mounted on something, set position to it and return.
         EntityAgent agent = entity as EntityAgent;
         if (agent?.MountedOn != null)
         {
@@ -161,9 +174,11 @@ public class EntityPlayerPhysics : EntityControlledPhysics, IRenderer
 
         SetState(pos, dt);
         SetPlayerControls(pos, controls, dt);
+        ApplyMotion(pos, controls, dt);
         ApplyTests(pos, controls, dt);
 
-        if (controls.Gliding) //Might need to do this on both sides
+        // Attempt to stop gliding/flying.
+        if (controls.Gliding)
         {
             if (entity.Collided || entity.FeetInLiquid || !entity.Alive || player.WorldData.FreeMove)
             {
@@ -173,8 +188,6 @@ public class EntityPlayerPhysics : EntityControlledPhysics, IRenderer
                 entityPlayer.WalkPitch = 0;
             }
         }
-
-        entity.PhysicsUpdateWatcher?.Invoke(accum, prevPos);
     }
 
     public void SetPlayerControls(EntityPos pos, EntityControls controls, float dt)
@@ -235,7 +248,7 @@ public class EntityPlayerPhysics : EntityControlledPhysics, IRenderer
                 {
                     entityPlayer.WalkPitch = 0;
                 }
-                else //Slowly revert player to upright position if feet touched the bottom of water
+                else // Slowly revert player to upright position if feet touched the bottom of water.
                 {   
                     entityPlayer.WalkPitch = GameMath.Mod(entityPlayer.WalkPitch, GameMath.TWOPI);
                     entityPlayer.WalkPitch -= GameMath.Clamp(entityPlayer.WalkPitch, 0, 1.2f * dt * GlobalConstants.OverallSpeedMultiplier);
@@ -248,7 +261,7 @@ public class EntityPlayerPhysics : EntityControlledPhysics, IRenderer
         }
     }
 
-    //60/s client-side updates
+    // 60/s client-side updates.
     public float accum = 0;
     public float interval = 1 / 60f;
 
@@ -258,6 +271,16 @@ public class EntityPlayerPhysics : EntityControlledPhysics, IRenderer
     public void OnRenderFrame(float dt, EnumRenderStage stage)
     {
         if (capi.IsGamePaused) return;
+
+        // Unregister the entity if it isn't the player.
+        if (capi.World.Player.Entity != entity)
+        {
+            remote = true;
+            capi.Event.UnregisterRenderer(this, EnumRenderStage.Before);
+            physicsModules.Clear();
+            smoothStepping = false;
+            return;
+        }
 
         accum += dt;
 

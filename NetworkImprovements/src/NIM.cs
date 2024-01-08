@@ -57,11 +57,10 @@ public class NIM : ModSystem
         api.RegisterEntityBehaviorClass("legacyinterpolateposition", typeof(EntityBehaviorInterpolatePosition));
         api.RegisterEntityBehaviorClass("legacypassivephysics", typeof(EntityBehaviorPassivePhysics));
 
-        /*
         mappings.Remove("playerphysics");
         mappingsTypeToBehavior.Remove(typeof(EntityBehaviorPlayerPhysics));
         api.RegisterEntityBehaviorClass("playerphysics", typeof(EntityPlayerPhysics));
-        */
+        
     }
 
     public override void StartClientSide(ICoreClientAPI api)
@@ -77,7 +76,7 @@ public class NIM : ModSystem
             if (listener.Millisecondinterval == 100 && listener.Handler.Target is SystemSendPosition)
             {
                 listenerFound = listener;
-                listener.Millisecondinterval = 100;
+                listener.Millisecondinterval = 50;
             }
         }
 
@@ -94,7 +93,7 @@ public class NIM : ModSystem
 
         ServerMain main = api.World as ServerMain;
 
-        //Set the server sending entity position updates to the client to a new rate
+        // Set the server sending entity position updates to the client to a new rate.
         List<GameTickListener> listeners = main.EventManager.GetField<List<GameTickListener>>("GameTickListenersEntity");
         GameTickListener listenerFound = null;
         foreach (GameTickListener listener in listeners)
@@ -135,7 +134,7 @@ public class NIM : ModSystem
     public void OnTickrateReceived(TickrateMessage packet)
     {
         tickrate = packet.tickrate;
-        clientUpdateListener.Millisecondinterval = 1000 / tickrate;
+        clientUpdateListener.Millisecondinterval = 1000 / tickrate / 2; // Send packet to server with player position at twice the tickrate.
     }
 
     readonly Harmony harmony = new("networkimprovements");
