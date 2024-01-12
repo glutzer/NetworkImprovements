@@ -23,20 +23,17 @@ public class PModuleKnockback : PModule
     {
         // If a knockback is queued to happen apply the motion.
         int knockbackState = entity.Attributes.GetInt("dmgkb");
-        if (knockbackState > 0)
+        if (knockbackState == 1)
         {
-            if (knockbackState == 1)
-            {
-                double kbX = entity.WatchedAttributes.GetDouble("kbdirX") * 1.5;
-                double kbY = entity.WatchedAttributes.GetDouble("kbdirY") * 1.5;
-                double kbZ = entity.WatchedAttributes.GetDouble("kbdirZ") * 1.5;
+            double kbX = entity.WatchedAttributes.GetDouble("kbdirX") * 1.5;
+            double kbY = entity.WatchedAttributes.GetDouble("kbdirY") * 1.5;
+            double kbZ = entity.WatchedAttributes.GetDouble("kbdirZ") * 1.5;
 
-                pos.Motion.X += kbX;
-                pos.Motion.Y += kbY;
-                pos.Motion.Z += kbZ;
+            pos.Motion.X += kbX;
+            pos.Motion.Y += kbY;
+            pos.Motion.Z += kbZ;
 
-                entity.Attributes.SetInt("dmgkb", 0);
-            }
+            entity.Attributes.SetInt("dmgkb", 0);
         }
     }
 }

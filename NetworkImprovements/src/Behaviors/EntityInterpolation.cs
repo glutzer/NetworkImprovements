@@ -82,6 +82,8 @@ public class EntityInterpolation : EntityBehavior, IRenderer
     public float currentBodyYaw;
     public float targetBodyYaw;
 
+    public Vec3d currentPos = new();
+
     public bool awaitQueue = true;
 
     public void PushQueue(PositionSnapshot snapshot)
@@ -133,6 +135,8 @@ public class EntityInterpolation : EntityBehavior, IRenderer
 
         currentHeadYaw = entity.ServerPos.HeadYaw;
         currentHeadPitch = entity.ServerPos.HeadPitch;
+
+        currentPos.Set(entity.ServerPos);
     }
 
     public Action OnFirstReceived;
