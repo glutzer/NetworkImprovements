@@ -89,13 +89,15 @@ public class EntityControlledPhysics : EntityBehavior, IPhysicsTickable
         entity.PhysicsUpdateWatcher?.Invoke(0, entity.SidedPos.XYZ);
     }
 
+    public float updateInterval = 1 / 15f;
+
     public override void OnReceivedServerPos(bool isTeleport, ref EnumHandling handled)
     {
         if (!remote) return;
 
         if (nPos == null) nPos.Set(entity.SidedPos);
 
-        float dt = capi.World.Player.Entity.WatchedAttributes.GetFloat("lastDelta");
+        float dt = updateInterval;
         float dtFactor = dt * 60;
 
         lPos.SetFrom(nPos);

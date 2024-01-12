@@ -1,79 +1,43 @@
 ﻿using HarmonyLib;
-using Vintagestory.API.Client;
 using Vintagestory.API.Common;
 using Vintagestory.API.Common.Entities;
-using Vintagestory.Client;
+using Vintagestory.API.MathTools;
+using Vintagestory.API.Util;
 using Vintagestory.Client.NoObf;
 using Vintagestory.GameContent;
-using Vintagestory.Server;
 
 public class Patches
 {
-    // Notify server of teleportation.
-    // Client-side only for the client player.
-    // Add a version so it's not thrown away.
-    [HarmonyPatch(typeof(EntityPlayer), "OnReceivedServerPacket")]
+    // The new position should only be set on the client receiving it. This breaks interpolation otherwise.
+    [HarmonyPatch(typeof(Entity), "OnReceivedServerPacket")]
     public static class ReceivedPacketPostfix
     {
-        [HarmonyPostfix]
-        public static void Postfix(EntityPlayer __instance, int packetid)
-        {
-            if (packetid != 1) return;
-
-            ICoreClientAPI capi = __instance.Api as ICoreClientAPI;
-
-            if (__instance == capi.World.Player.Entity)
-            {
-                Packet_Client packet = ClientPackets.PlayerPosition(capi.World.Player.Entity);
-                packet.PlayerPosition.PositionVersionNumber += 1;
-
-                (capi.World as ClientMain).SendPacketClient(packet);
-            }
-        }
-    }
-
-    // Postfix of the server receiving the client's position. Will call something in player physics.
-    [HarmonyPatch(typeof(ServerSystemEntitySimulation), "HandlePlayerPosition")]
-    public static class HandlePlayerPositionPostfix
-    {
-        [HarmonyPostfix]
-        public static void Postfix(Packet_Client packet, ConnectedClient client)
-        {
-            client.Player.Entity.GetBehavior<EntityPlayerPhysics>().OnReceivedClientPos(packet.PlayerPosition.PositionVersionNumber);
-        }
-    }
-
-    // Set delta here in a patch.
-    public static float dt = 0;
-    [HarmonyPatch(typeof(ServerSystemEntitySimulation), "UpdateEvery200ms")]
-    public static class UpdateEvery200msPostfix
-    {
         [HarmonyPrefix]
-        public static void Prefix(float dt)
+        public static bool Prefix(Entity __instance, int packetid, byte[] data)
         {
-            Patches.dt = dt;
-        }
-    }
-
-    [HarmonyPatch(typeof(ServerSystemEntitySimulation), "SendEntityAttributeUpdates")]
-    public static class SendEntityAttributeUpdatesPrefix
-    {
-        [HarmonyPrefix]
-        public static void Prefix(ServerSystemEntitySimulation __instance)
-        {
-            ServerMain server = __instance.GetField<ServerMain>("server");
-
-            // Set watched attribute on player dt float.
-            // Now in receivedServerPos I can get the delta of the new value from the player.
-            foreach (ConnectedClient client in __instance.GetField<ServerMain>("server").Clients.Values)
+            if (packetid == 1)
             {
-                ServerPlayer player = client.Player;
-
-                client?.Player?.Entity?.WatchedAttributes.SetFloat("lastDelta", dt);
-
-                // Time between the server receiving this entity's position and sending it. Subtracted from interval received by client.
-                client?.Player?.Entity?.WatchedAttributes.SetFloat("malus", server.ElapsedMilliseconds - player.LastReceivedClientPosition);
+                Vec3d vec3d = SerializerUtil.Deserialize<Vec3d>(data);
+                if (__instance == (__instance.World as ClientMain).Player.Entity)
+                {
+                    __instance.Pos.SetPos(vec3d);
+                }
+                __instance.ServerPos.SetPos(vec3d);
+                __instance.World.BlockAccessor.MarkBlockDirty(vec3d.AsBlockPos);
+                return false;
             }
+
+            EnumHandling handled = EnumHandling.PassThrough;
+            foreach (EntityBehavior behavior in __instance.SidedProperties.Behaviors)
+            {
+                behavior.OnReceivedServerPacket(packetid, data, ref handled);
+                if (handled == EnumHandling.PreventSubsequent)
+                {
+                    break;
+                }
+            }
+
+            return false;
         }
     }
 
@@ -96,7 +60,7 @@ public class Patches
                 }
             }
 
-            // Position not set automatically if the entity has interpolation.
+            // Position not set automatically if the entity has interpolation. I'd rather not check this every time.
             if (handled == EnumHandling.PassThrough && !__instance.HasBehavior<EntityInterpolation>())
             {
                 __instance.Pos.SetFrom(__instance.ServerPos);
@@ -106,7 +70,7 @@ public class Patches
         }
     }
 
-    // Patch this one AI Task to also try to get step height from the new physics.
+    // Patch this one AI Task to also try to get step height from the new physics if you're not overriding.
     [HarmonyPatch(typeof(AiTaskBaseTargetable), "StartExecute")]
     public static class StartExecutePostfix
     {
@@ -122,7 +86,7 @@ public class Patches
         }
     }
 
-    // Override initialize to use new behaviors since I found no easy way to do this.
+    // Replace projectile and stone with new behavior if you're not overriding.
     [HarmonyPatch(typeof(EntityProjectile), "Initialize")]
     public static class InitializePrefix
     {

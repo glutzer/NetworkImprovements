@@ -23,9 +23,6 @@ public class NIM : ModSystem
     public ICoreClientAPI capi;
     public ICoreServerAPI sapi;
 
-    public GameTickListener clientUpdateListener;
-    public GameTickListener serverUpdateListener;
-
     public IClientNetworkChannel clientChannel;
     public IServerNetworkChannel serverChannel;
 
@@ -69,6 +66,7 @@ public class NIM : ModSystem
 
         ClientMain main = api.World as ClientMain;
 
+        // Make the player not send positions at random intervals.
         List<GameTickListener> listeners = main.GetField<ClientEventManager>("eventManager").GetField<List<GameTickListener>>("GameTickListenersEntity");
         GameTickListener listenerFound = null;
         foreach (GameTickListener listener in listeners)
@@ -76,11 +74,10 @@ public class NIM : ModSystem
             if (listener.Millisecondinterval == 100 && listener.Handler.Target is SystemSendPosition)
             {
                 listenerFound = listener;
-                listener.Millisecondinterval = 50;
             }
         }
-
-        clientUpdateListener = listenerFound;
+        
+        listeners.Remove(listenerFound);
 
         clientChannel = capi.Network.RegisterChannel("nim")
             .RegisterMessageType<TickrateMessage>()
@@ -93,7 +90,9 @@ public class NIM : ModSystem
 
         ServerMain main = api.World as ServerMain;
 
+        // Disabled in harmony.
         // Set the server sending entity position updates to the client to a new rate.
+        /*
         List<GameTickListener> listeners = main.EventManager.GetField<List<GameTickListener>>("GameTickListenersEntity");
         GameTickListener listenerFound = null;
         foreach (GameTickListener listener in listeners)
@@ -101,11 +100,12 @@ public class NIM : ModSystem
             if (listener.Millisecondinterval == 200 && listener.Handler.Target is ServerSystemEntitySimulation)
             {
                 listenerFound = listener;
-                listener.Millisecondinterval = 100;
+                listener.Millisecondinterval = 200;
             }
         }
 
         serverUpdateListener = listenerFound;
+        */
 
         serverChannel = sapi.Network.RegisterChannel("nim")
             .RegisterMessageType<TickrateMessage>();
@@ -117,6 +117,7 @@ public class NIM : ModSystem
 
     public void UpdateTickrates(IServerPlayer byPlayer)
     {
+        // Sets rate at which physics systems will send out updates. Disabled right now.
         serverChannel.BroadcastPacket(new TickrateMessage()
         {
             tickrate = tickrate
@@ -125,8 +126,10 @@ public class NIM : ModSystem
 
     public void OnTickrateReceived(TickrateMessage packet)
     {
+        /*
         tickrate = packet.tickrate;
         clientUpdateListener.Millisecondinterval = 1000 / tickrate / 2; // Send packet to server with player position at twice the tickrate.
+        */
     }
 
     readonly Harmony harmony = new("networkimprovements");
@@ -190,7 +193,6 @@ public class TickrateCommand : ServerChatCommand
         try
         {
             nim.tickrate = args[0].ToInt();
-            nim.serverUpdateListener.Millisecondinterval = 1000 / nim.tickrate;
             nim.UpdateTickrates(null);
             nim.sapi.SendMessage(player, 0, $"Tickrate set to {nim.tickrate}.", EnumChatType.CommandSuccess);
         }

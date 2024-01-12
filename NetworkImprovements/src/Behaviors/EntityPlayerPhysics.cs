@@ -6,6 +6,8 @@ using Vintagestory.API.Config;
 using Vintagestory.API.Datastructures;
 using Vintagestory.API.MathTools;
 using Vintagestory.API.Server;
+using Vintagestory.Client;
+using Vintagestory.Client.NoObf;
 using Vintagestory.Server;
 
 // Client-side player physics.
@@ -16,6 +18,8 @@ public class EntityPlayerPhysics : EntityControlledPhysics, IRenderer
     public EntityPlayer entityPlayer;
     public long lastReceivedPosition;
     public int posVersion = 0;
+
+    public ClientMain clientMain;
 
     public EntityPlayerPhysics(Entity entity) : base(entity)
     {
@@ -31,6 +35,7 @@ public class EntityPlayerPhysics : EntityControlledPhysics, IRenderer
 
         if (entity.Api.Side == EnumAppSide.Client)
         {
+            clientMain = (ClientMain)capi.World;
             // Remote on server. First render frame on client checks if it's a local player.
             remote = false;
         }
@@ -72,6 +77,8 @@ public class EntityPlayerPhysics : EntityControlledPhysics, IRenderer
         physicsModules.Add(new PModuleKnockback());
     }
 
+    public float updateInterval = 1 / 15f;
+
     public void OnReceivedClientPos(int version)
     {
         if (!remote) return;
@@ -82,23 +89,14 @@ public class EntityPlayerPhysics : EntityControlledPhysics, IRenderer
         // At the very least there should be movement.
         entity.ServerPos.SetFrom(entity.Pos);
 
-        float dt = serverPlayer.LastReceivedClientPosition - lastReceivedPosition;
-        dt /= 1000;
-
         bool isTeleport = version > posVersion;
 
         if (isTeleport)
         {
             posVersion = version;
-            dt += 0.10f;
         }
 
-        // If the delta is 0 an update was already received this tick.
-        if (dt == 0) return;
-
-        lastReceivedPosition = serverPlayer.LastReceivedClientPosition;
-
-        HandleRemote(dt, isTeleport);
+        HandleRemote(updateInterval, isTeleport);
     }
 
     public override void OnReceivedServerPos(bool isTeleport, ref EnumHandling handled)
@@ -107,9 +105,7 @@ public class EntityPlayerPhysics : EntityControlledPhysics, IRenderer
 
         //entity.Pos.SetFrom(entity.ServerPos);
 
-        float dt = capi.World.Player.Entity.WatchedAttributes.GetFloat("lastDelta");
-
-        HandleRemote(dt, isTeleport);
+        HandleRemote(updateInterval, isTeleport);
     }
 
     public void HandleRemote(float dt, bool isTeleport)
@@ -311,6 +307,7 @@ public class EntityPlayerPhysics : EntityControlledPhysics, IRenderer
     // 60/s client-side updates.
     public float accum = 0;
     public float interval = 1 / 60f;
+    public int currentTick;
 
     // Do physics every frame on the client.
     public void OnRenderFrame(float dt, EnumRenderStage stage)
@@ -338,11 +335,21 @@ public class EntityPlayerPhysics : EntityControlledPhysics, IRenderer
         {
             OnPhysicsTick(interval);
             accum -= interval;
+            currentTick++;
+
+            // Send position every 4 ticks.
+            if (currentTick % 4 == 0)
+            {
+                if (clientMain.GetField<bool>("Spawned") && clientMain.EntityPlayer.Alive)
+                {
+                    clientMain.SendPacketClient(ClientPackets.PlayerPosition(clientMain.EntityPlayer));
+                }
+            }
+
+            // This should be in here right?
+            entity.PhysicsUpdateWatcher?.Invoke(accum, prevPos);
+            AfterPhysicsTick(dt);
         }
-
-        entity.PhysicsUpdateWatcher?.Invoke(accum, prevPos);
-
-        AfterPhysicsTick(dt);
     }
 
     public double RenderOrder => 1;

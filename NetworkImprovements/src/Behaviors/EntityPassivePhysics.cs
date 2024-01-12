@@ -51,7 +51,6 @@ public class EntityPassivePhysics : EntityBehavior, IPhysicsTickable
     /// </summary>
     public EntityPos lPos = new();
     public Vec3d nPos = new();
-    public long lastReceived = 0;
 
     /// <summary>
     /// Called when entity spawns.
@@ -90,9 +89,9 @@ public class EntityPassivePhysics : EntityBehavior, IPhysicsTickable
 
         if (entity.Api is ICoreClientAPI capi) this.capi = capi;
         if (entity.Api is ICoreServerAPI sapi) this.sapi = sapi;
-
-        if (this.capi != null) lastReceived = this.capi.InWorldEllapsedMilliseconds;
     }
+
+    public float updateInterval = 1 / 15f;
 
     public override void OnReceivedServerPos(bool isTeleport, ref EnumHandling handled)
     {
@@ -100,9 +99,8 @@ public class EntityPassivePhysics : EntityBehavior, IPhysicsTickable
 
         if (nPos == null) nPos.Set(entity.SidedPos);
 
-        float dt = (lastReceived - capi.InWorldEllapsedMilliseconds) / 1000f;
+        float dt = updateInterval;
         float dtFactor = dt * 60;
-        lastReceived = capi.InWorldEllapsedMilliseconds;
 
         lPos.SetFrom(nPos);
         nPos.Set(entity.SidedPos);

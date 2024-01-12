@@ -1,16 +1,17 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Threading;
-using Vintagestory.API.Client;
 using Vintagestory.API.Common;
+using Vintagestory.API.Common.Entities;
+using Vintagestory.API.Datastructures;
 using Vintagestory.API.Server;
 using Vintagestory.API.Util;
-using Vintagestory.Client.NoObf;
+using Vintagestory.Client;
 using Vintagestory.Common;
 using Vintagestory.Server;
 
 // Load balanced on server.
-public class PhysicsManager : LoadBalancedTask, IRenderer
+public class PhysicsManager : LoadBalancedTask
 {
     public Queue<IPhysicsTickable> toAdd = new();
     public Queue<IPhysicsTickable> toRemove = new();
@@ -19,12 +20,11 @@ public class PhysicsManager : LoadBalancedTask, IRenderer
     public float interval = 1 / 30f; // 30 UPS.
 
     public ICoreAPI api;
-    public ICoreClientAPI capi;
 
-    public ClientMain client;
     public ServerMain server;
 
     public long listener;
+
     public LoadBalancer loadBalancer;
 
     public float accumulation = 0;
@@ -32,8 +32,8 @@ public class PhysicsManager : LoadBalancedTask, IRenderer
     // All tickable behaviors.
     public List<IPhysicsTickable> tickables = new();
     public int tickableCount = 0;
-    public double RenderOrder => 1;
-    public int RenderRange => 9999;
+
+    public ServerSystemEntitySimulation es;
 
     public PhysicsManager(ICoreAPI api)
     {
@@ -46,21 +46,176 @@ public class PhysicsManager : LoadBalancedTask, IRenderer
             loadBalancer = new LoadBalancer(this, ServerMain.Logger);
             loadBalancer.CreateDedicatedThreads(threadCount, "physicsManager", server.Serverthreads);
             listener = server.RegisterGameTickListener(ServerTick, 10);
-        }
 
-        if (api is ICoreClientAPI capi)
-        {
-            client = capi.World as ClientMain;
-
-            this.capi = capi;
-
-            capi.Event.RegisterRenderer(this, EnumRenderStage.Before);
+            es = server.GetField<ServerSystem[]>("Systems")[6] as ServerSystemEntitySimulation;
+            GrabFields();
         }
     }
 
-    /// <summary>
-    /// Adds something with physics to be ticked.
-    /// </summary>
+    private List<KeyValuePair<Entity, EntityDespawnData>> entitiesNowOutOfRange;
+    private List<Entity> entitiesNowInRange;
+    private List<Entity> entitiesFullUpdate;
+    private List<Entity> entitiesPartialUpdate;
+    private List<Entity> entitiesPositionupdate;
+    private List<Entity> entitiesPositionMinimalupdate;
+    private List<Entity> entitiesFullDebugUpdate;
+    private List<Entity> entitiesPartialDebugUpdate;
+
+    private CachingConcurrentDictionary<long, Entity> loadedEntities;
+
+    public void GrabFields()
+    {
+        entitiesNowOutOfRange = es.GetField<List<KeyValuePair<Entity, EntityDespawnData>>>("entitiesNowOutOfRange");
+        entitiesNowInRange = es.GetField<List<Entity>>("entitiesNowInRange");
+        entitiesFullUpdate = es.GetField<List<Entity>>("entitiesFullUpdate");
+        entitiesPartialUpdate = es.GetField<List<Entity>>("entitiesPartialUpdate");
+        entitiesPositionupdate = es.GetField<List<Entity>>("entitiesPositionupdate");
+        entitiesPositionMinimalupdate = es.GetField<List<Entity>>("entitiesPositionMinimalupdate");
+        entitiesFullDebugUpdate = es.GetField<List<Entity>>("entitiesFullDebugUpdate");
+        entitiesPartialDebugUpdate = es.GetField<List<Entity>>("entitiesPartialDebugUpdate");
+
+        loadedEntities = server.GetField<CachingConcurrentDictionary<long, Entity>>("LoadedEntities");
+    }
+
+    public void UpdateEntityPositions()
+    {
+        foreach (ConnectedClient client in server.Clients.Values)
+        {
+            if (client.State != EnumClientState.Connected && client.State != EnumClientState.Playing)
+            {
+                continue;
+            }
+
+            entitiesNowInRange.Clear();
+            entitiesNowOutOfRange.Clear();
+            entitiesFullUpdate.Clear();
+            entitiesPartialUpdate.Clear();
+            entitiesPositionupdate.Clear();
+            entitiesPositionMinimalupdate.Clear();
+            entitiesFullDebugUpdate.Clear();
+            entitiesPartialDebugUpdate.Clear();
+
+            foreach (Entity entity in loadedEntities.Values)
+            {
+                bool trackedByClient = client.TrackedEntities.ContainsKey(entity.EntityId);
+                bool noChunk = !client.DidSendChunk(entity.InChunkIndex3d) && entity.EntityId != client.Player.Entity.EntityId;
+                if (noChunk && !trackedByClient) continue;
+
+                if (entity == client.Entityplayer)
+                {
+                    if (entity.WatchedAttributes.AllDirty)
+                    {
+                        entitiesFullUpdate.Add(entity);
+                    }
+                    else if (entity.WatchedAttributes.PartialDirty)
+                    {
+                        entitiesPartialUpdate.Add(entity);
+                    }
+
+                    continue;
+                }
+
+                bool inRange = entity.ServerPos.InRangeOf(client.Entityplayer.ServerPos, es.GetField<int>("trackingRangeSq")) && !noChunk;
+                if (!trackedByClient && !inRange)
+                {
+                    continue;
+                }
+
+                if (trackedByClient && !inRange)
+                {
+                    client.TrackedEntities.Remove(entity.EntityId);
+                    entitiesNowOutOfRange.Add(new KeyValuePair<Entity, EntityDespawnData>(entity, new EntityDespawnData
+                    {
+                        Reason = EnumDespawnReason.OutOfRange
+                    }));
+                    continue;
+                }
+
+                if (!trackedByClient && inRange && client.TrackedEntities.Count < MagicNum.TrackedEntitiesPerClient)
+                {
+                    client.TrackedEntities.Add(entity.EntityId, value: true);
+                    entitiesNowInRange.Add(entity);
+                    continue;
+                }
+
+                if (entity.WatchedAttributes.AllDirty)
+                {
+                    entitiesFullUpdate.Add(entity);
+                }
+                else if (entity.WatchedAttributes.PartialDirty)
+                {
+                    entitiesPartialUpdate.Add(entity);
+                }
+
+                if (server.Config.EntityDebugMode)
+                {
+                    if (entity.DebugAttributes.AllDirty)
+                    {
+                        entitiesFullDebugUpdate.Add(entity);
+                    }
+                    else if (entity.DebugAttributes.PartialDirty)
+                    {
+                        entitiesPartialDebugUpdate.Add(entity);
+                    }
+                }
+
+                // Player updates sent elsewhere to sync better.
+                if (entity is EntityPlayer) continue;
+
+                EntityAgent entityAgent = entity as EntityAgent;
+                if ((entity.AnimManager != null && entity.AnimManager.AnimationsDirty) || entity.IsTeleport)
+                {
+                    entitiesPositionupdate.Add(entity);
+                }
+                else if (!entity.ServerPos.BasicallySameAs(entity.PreviousServerPos, 0.002) || (entityAgent != null && entityAgent.Controls.Dirty))
+                {
+                    entitiesPositionMinimalupdate.Add(entity);
+                }
+            }
+
+            foreach (Entity item in entitiesNowInRange)
+            {
+                if (item is EntityPlayer entityPlayer)
+                {
+                    server.PlayersByUid.TryGetValue(entityPlayer.PlayerUID, out var value);
+                    if (value != null)
+                    {
+                        server.SendPacket(client.Id, ((ServerWorldPlayerData)value.WorldData).ToPacketForOtherPlayers(value));
+                    }
+                }
+
+                server.SendPacket(client.Id, ServerPackets.GetFullEntityPacket(item));
+            }
+
+            if (entitiesFullUpdate.Count > 0 || entitiesPartialUpdate.Count > 0 || entitiesPositionupdate.Count > 0 || entitiesPositionMinimalupdate.Count > 0)
+            {
+                server.SendPacket(client.Id, ServerPackets.GetBulkEntityAttributesPacket(entitiesFullUpdate, entitiesPartialUpdate, entitiesPositionupdate, entitiesPositionMinimalupdate));
+            }
+
+            if (server.Config.EntityDebugMode && (entitiesFullDebugUpdate.Count > 0 || entitiesPartialDebugUpdate.Count > 0))
+            {
+                server.SendPacket(client.Id, ServerPackets.GetBulkEntityDebugAttributesPacket(entitiesFullDebugUpdate, entitiesPartialDebugUpdate));
+            }
+
+            if (entitiesNowOutOfRange.Count > 0)
+            {
+                server.SendPacket(client.Id, ServerPackets.GetEntityDespawnPacket(entitiesNowOutOfRange));
+            }
+        }
+
+        foreach (Entity entity in loadedEntities.Values)
+        {
+            entity.WatchedAttributes.MarkClean();
+
+            if (entity.AnimManager != null) entity.AnimManager.AnimationsDirty = false;
+
+            entity.IsTeleport = false;
+
+            if (entity is EntityAgent agent) agent.Controls.Dirty = false;
+        }
+    }
+
+    // Add an entity.
     public void AddPhysicsTickables()
     {
         while (toAdd.Count > 0)
@@ -70,9 +225,7 @@ public class PhysicsManager : LoadBalancedTask, IRenderer
         }
     }
 
-    /// <summary>
-    /// Remove a tickable when entity despawns.
-    /// </summary>
+    // Remove and entity.
     public void RemovePhysicsTickables()
     {
         while (toRemove.Count > 0)
@@ -82,9 +235,7 @@ public class PhysicsManager : LoadBalancedTask, IRenderer
         }
     }
 
-    /// <summary>
-    /// Fixed interval ticker.
-    /// </summary>
+    // Ticks physics at fixed interval and skips ticks when overloaded.
     public void ServerTick(float dt)
     {
         AddPhysicsTickables();
@@ -105,30 +256,16 @@ public class PhysicsManager : LoadBalancedTask, IRenderer
         }
     }
 
-    public void OnRenderFrame(float dt, EnumRenderStage stage)
-    {
-        AddPhysicsTickables();
-        RemovePhysicsTickables();
-
-        if (capi.IsGamePaused) return;
-
-        accumulation += dt;
-
-        if (accumulation > 1000)
-        {
-            // Skip ticks.
-            accumulation = 0;
-        }
-
-        while (accumulation > interval)
-        {
-            accumulation -= interval;
-            DoClientTick();
-        }
-    }
+    int currentTick;
 
     public void DoServerTick()
     {
+        currentTick++;
+        if (currentTick % 2 == 0)
+        {
+            UpdateEntityPositions(); // 15 times/s instead of 5 times/s, exactly after physics ticks.
+        }
+
         if (tickableCount == 0) return;
 
         loadBalancer.SynchroniseWorkToMainThread();
@@ -146,23 +283,6 @@ public class PhysicsManager : LoadBalancedTask, IRenderer
             {
                 ServerMain.Logger.Error(e);
             }
-        }
-    }
-
-    public void DoClientTick()
-    {
-        if (tickableCount == 0) return;
-
-        foreach (IPhysicsTickable tickable in tickables)
-        {
-            tickable.OnPhysicsTick(interval);
-        }
-
-        // Processes post-ticks at a thread-safe level.
-        foreach (IPhysicsTickable tickable in tickables)
-        {
-            tickable.FlagTickDone = 0;
-            tickable.AfterPhysicsTick(interval);
         }
     }
 
@@ -213,14 +333,7 @@ public class PhysicsManager : LoadBalancedTask, IRenderer
     /// </summary>
     public void Dispose()
     {
-        if (api is ICoreServerAPI)
-        {
-            server.UnregisterGameTickListener(listener);
-        }
-        else
-        {
-            (client.Api as ICoreClientAPI).Event.UnregisterRenderer(this, EnumRenderStage.Before);
-        }
+        server?.UnregisterGameTickListener(listener);
 
         tickables.Clear(); // Might cause an error?
     }

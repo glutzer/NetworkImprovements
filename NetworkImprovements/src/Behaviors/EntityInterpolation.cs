@@ -89,6 +89,9 @@ public class EntityInterpolation : EntityBehavior, IRenderer
         positionQueue.Enqueue(snapshot);
     }
 
+    // Interval at what things should be received.
+    public float interval = 1 / 15f;
+
     public void PopQueue()
     {
         // Lerping only starts if pL is not null.
@@ -105,7 +108,7 @@ public class EntityInterpolation : EntityBehavior, IRenderer
         pN = positionQueue.Dequeue();
 
         // Clear flooded queue.
-        while (positionQueue.Count > 2) PopQueue();
+        while (positionQueue.Count > 1) PopQueue();
     }
 
     public override void Initialize(EntityProperties properties, JsonObject attributes)
@@ -116,6 +119,20 @@ public class EntityInterpolation : EntityBehavior, IRenderer
         lastIdle.Set(entity.ServerPos.X, 1000, entity.ServerPos.Z);
 
         PushQueue(new PositionSnapshot(entity.ServerPos, 0));
+
+        targetYaw = entity.ServerPos.Yaw;
+        targetPitch = entity.ServerPos.Pitch;
+        targetRoll = entity.ServerPos.Roll;
+
+        targetHeadYaw = entity.ServerPos.HeadYaw;
+        targetHeadPitch = entity.ServerPos.HeadPitch;
+
+        currentYaw = entity.ServerPos.Yaw;
+        currentPitch = entity.ServerPos.Pitch;
+        currentRoll = entity.ServerPos.Roll;
+
+        currentHeadYaw = entity.ServerPos.HeadYaw;
+        currentHeadPitch = entity.ServerPos.HeadPitch;
     }
 
     public Action OnFirstReceived;
@@ -127,18 +144,7 @@ public class EntityInterpolation : EntityBehavior, IRenderer
     /// </summary>
     public override void OnReceivedServerPos(bool isTeleport, ref EnumHandling handled)
     {
-        // How long since the last update sent.
-        float lastDelta = capi.World.Player.Entity.WatchedAttributes.GetFloat("lastDelta");
-
-        if (entity is EntityPlayer)
-        {
-            float malus = entity.WatchedAttributes.GetFloat("malus", 0) / 1000;
-            lastDelta -= malus;
-            lastDelta += lastMalus;
-            lastMalus = malus;
-        }
-
-        PushQueue(new PositionSnapshot(entity.ServerPos, lastDelta));
+        PushQueue(new PositionSnapshot(entity.ServerPos, interval));
 
         targetYaw = entity.ServerPos.Yaw;
         targetPitch = entity.ServerPos.Pitch;
@@ -153,6 +159,14 @@ public class EntityInterpolation : EntityBehavior, IRenderer
         }
 
         OnFirstReceived?.Invoke();
+
+        if (isTeleport)
+        {
+            lastIdle.Set(pN.x, pN.y, pN.z);
+            dtAccum = 0;
+
+            awaitQueue = true;
+        }
     }
 
     public Vec3d lastIdle = new();
@@ -171,7 +185,7 @@ public class EntityInterpolation : EntityBehavior, IRenderer
 
         if (awaitQueue)
         {
-            if (positionQueue.Count > 3)
+            if (positionQueue.Count > 2)
             {
                 awaitQueue = false;
                 PopQueue();
@@ -194,21 +208,15 @@ public class EntityInterpolation : EntityBehavior, IRenderer
             }
             else
             {
-                /*
                 lastIdle.Set(pN.x, pN.y, pN.z);
                 dtAccum = 0;
 
                 awaitQueue = true;
                 return;
-                */
-
-
-                PushQueue(pN.Clone());
-                PopQueue();
             }
         }
 
-        if (positionQueue.Count > 2)
+        if (positionQueue.Count > 1)
         {
             PopQueue();
         }
