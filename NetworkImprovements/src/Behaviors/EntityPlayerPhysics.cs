@@ -6,14 +6,16 @@ using Vintagestory.API.Config;
 using Vintagestory.API.Datastructures;
 using Vintagestory.API.MathTools;
 using Vintagestory.API.Server;
+using Vintagestory.Server;
 
-/// <summary>
-/// Client-side player physics.
-/// </summary>
+// Client-side player physics.
 public class EntityPlayerPhysics : EntityControlledPhysics, IRenderer
 {
     public IPlayer player;
+    public ServerPlayer serverPlayer;
     public EntityPlayer entityPlayer;
+    public long lastReceivedPosition;
+    public int posVersion = 0;
 
     public EntityPlayerPhysics(Entity entity) : base(entity)
     {
@@ -29,9 +31,19 @@ public class EntityPlayerPhysics : EntityControlledPhysics, IRenderer
 
         if (entity.Api.Side == EnumAppSide.Client)
         {
-            // Remote on server.
+            // Remote on server. First render frame on client checks if it's a local player.
             remote = false;
         }
+        else
+        {
+            // Can be removed if interval is sent in player position packet.
+            lastReceivedPosition = sapi.World.ElapsedMilliseconds;
+        }
+
+        stepHeight = attributes["stepHeight"].AsFloat(0.6f);
+        sneakTestCollisionbox = entity.CollisionBox.Clone().OmniNotDownGrowBy(-0.1f);
+        sneakTestCollisionbox.Y2 /= 2;
+        smoothStepping = !remote;
 
         // If the controller of the player.
         if (!remote)
@@ -40,26 +52,13 @@ public class EntityPlayerPhysics : EntityControlledPhysics, IRenderer
             SetModules();
         }
 
-        stepHeight = attributes["stepHeight"].AsFloat(0.6f);
-
         JsonObject physics = properties?.Attributes?["physics"];
         for (int i = 0; i < physicsModules.Count; i++)
         {
             physicsModules[i].Initialize(physics, entity);
         }
 
-        sneakTestCollisionbox = entity.CollisionBox.Clone().OmniNotDownGrowBy(-0.1f);
-        sneakTestCollisionbox.Y2 /= 2;
-
-        smoothStepping = !remote;
-
-        if (remote)
-        {
-            if (capi == null)
-            {
-                lastReceived = sapi.World.ElapsedMilliseconds;
-            }
-        }
+        entity.PhysicsUpdateWatcher?.Invoke(0, entity.SidedPos.XYZ);
     }
 
     public override void SetModules()
@@ -73,46 +72,83 @@ public class EntityPlayerPhysics : EntityControlledPhysics, IRenderer
         physicsModules.Add(new PModuleKnockback());
     }
 
-    public void OnReceivedClientPos()
+    public void OnReceivedClientPos(int version)
     {
         if (!remote) return;
 
-        float dt = (sapi.World.ElapsedMilliseconds - lastReceived) / 1000f;
-        lastReceived = sapi.World.ElapsedMilliseconds;
+        serverPlayer ??= entityPlayer.Player as ServerPlayer;
 
-        HandleRemote(dt);
+        // Both normal and server pos are now set to the received pos.
+        // At the very least there should be movement.
+        entity.ServerPos.SetFrom(entity.Pos);
+
+        float dt = serverPlayer.LastReceivedClientPosition - lastReceivedPosition;
+        dt /= 1000;
+
+        bool isTeleport = version > posVersion;
+
+        if (isTeleport)
+        {
+            posVersion = version;
+            dt += 0.10f;
+        }
+
+        // If the delta is 0 an update was already received this tick.
+        if (dt == 0) return;
+
+        lastReceivedPosition = serverPlayer.LastReceivedClientPosition;
+
+        HandleRemote(dt, isTeleport);
     }
 
     public override void OnReceivedServerPos(bool isTeleport, ref EnumHandling handled)
     {
         if (!remote) return;
 
+        //entity.Pos.SetFrom(entity.ServerPos);
+
         float dt = capi.World.Player.Entity.WatchedAttributes.GetFloat("lastDelta");
 
-        HandleRemote(dt);
+        HandleRemote(dt, isTeleport);
     }
 
-    public void HandleRemote(float dt)
+    public void HandleRemote(float dt, bool isTeleport)
     {
         player ??= entityPlayer.Player;
+
         if (player == null) return;
 
-        if (nPos == null) nPos.Set(entity.SidedPos);
+        //if (nPos == null) nPos.Set(entity.SidedPos);
+        if (nPos == null) nPos.Set(entity.ServerPos);
 
         float dtFactor = dt * 60;
 
         lPos.SetFrom(nPos);
-        nPos.Set(entity.SidedPos);
+
+        //nPos.Set(entity.SidedPos);
+        nPos.Set(entity.ServerPos);
+
+        // Set the last pos to be the same as the next pos when teleporting.
+        if (isTeleport)
+        {
+            lPos.SetFrom(nPos);
+        }
 
         lPos.Motion.X = (nPos.X - lPos.X) / dtFactor;
         lPos.Motion.Y = (nPos.Y - lPos.Y) / dtFactor;
         lPos.Motion.Z = (nPos.Z - lPos.Z) / dtFactor;
 
+        // I think this is set when interpolating anyways?
         EntityAgent agent = entity as EntityAgent;
         if (agent?.MountedOn != null)
         {
             entity.Swimming = false;
             entity.OnGround = false;
+
+            if (capi != null)
+            {
+                entity.SidedPos.SetPos(agent.MountedOn.MountPosition);
+            }
 
             entity.SidedPos.Motion.X = 0;
             entity.SidedPos.Motion.Y = 0;
@@ -126,7 +162,8 @@ public class EntityPlayerPhysics : EntityControlledPhysics, IRenderer
 
         SetState(lPos, dt);
 
-        // Apply gravity then set collision.
+        // Apply gravity then set collision. If collision needs to happen remotely do it here.
+        // Notice there's no fall damage on the server because collision never happens remotely.
         /*
         double gravityStrength = 1 / 60f * dtFactor + Math.Max(0, -0.015f * lPos.Motion.Y * dtFactor);
         lPos.Motion.Y -= gravityStrength;
@@ -147,15 +184,22 @@ public class EntityPlayerPhysics : EntityControlledPhysics, IRenderer
     public override void OnPhysicsTick(float dt)
     {
         if (entity.State != EnumEntityState.Active) return;
-        if (double.IsNaN(entity.SidedPos.Y)) return;
 
         player ??= entityPlayer.Player;
+
         if (player == null) return;
 
-        EntityControls controls = ((EntityAgent)entity).Controls;
-        EntityPos pos = entity.SidedPos;
+        // Weird NAN bug.
+        //if (double.IsNaN(entity.SidedPos.Y)) return;
 
+        EntityPos pos = entity.SidedPos;
+        EntityControls controls = ((EntityAgent)entity).Controls;
+
+        // Set previous pos to be used for camera callback.
         prevPos.Set(pos);
+
+        SetState(pos, dt);
+        SetPlayerControls(pos, controls, dt);
 
         // If mounted on something, set position to it and return.
         EntityAgent agent = entity as EntityAgent;
@@ -172,8 +216,6 @@ public class EntityPlayerPhysics : EntityControlledPhysics, IRenderer
             return;
         }
 
-        SetState(pos, dt);
-        SetPlayerControls(pos, controls, dt);
         ApplyMotion(pos, controls, dt);
         ApplyTests(pos, controls, dt);
 
@@ -222,8 +264,8 @@ public class EntityPlayerPhysics : EntityControlledPhysics, IRenderer
             }
 
             float desiredYaw = (float)Math.Atan2(controls.WalkVector.X, controls.WalkVector.Z) - GameMath.PIHALF;
-
             float yawDist = GameMath.AngleRadDistance(entityPlayer.WalkYaw, desiredYaw);
+
             entityPlayer.WalkYaw += GameMath.Clamp(yawDist, -6 * dt * GlobalConstants.OverallSpeedMultiplier, 6 * dt * GlobalConstants.OverallSpeedMultiplier);
             entityPlayer.WalkYaw = GameMath.Mod(entityPlayer.WalkYaw, GameMath.TWOPI);
 
@@ -241,7 +283,10 @@ public class EntityPlayerPhysics : EntityControlledPhysics, IRenderer
         }
         else
         {
-            if (!entity.Swimming && !controls.Gliding) entityPlayer.WalkPitch = 0;
+            if (!entity.Swimming && !controls.Gliding)
+            {
+                entityPlayer.WalkPitch = 0;
+            }
             else if (entity.OnGround && entityPlayer.WalkPitch != 0)
             {
                 if (entityPlayer.WalkPitch < 0.01f || entityPlayer.WalkPitch > GameMath.TWOPI - 0.01f)
@@ -252,9 +297,11 @@ public class EntityPlayerPhysics : EntityControlledPhysics, IRenderer
                 {   
                     entityPlayer.WalkPitch = GameMath.Mod(entityPlayer.WalkPitch, GameMath.TWOPI);
                     entityPlayer.WalkPitch -= GameMath.Clamp(entityPlayer.WalkPitch, 0, 1.2f * dt * GlobalConstants.OverallSpeedMultiplier);
+
                     if (entityPlayer.WalkPitch < 0) entityPlayer.WalkPitch = 0;
                 }
             }
+
             float prevYaw = pos.Yaw;
             controls.CalcMovementVectors(pos, dt);
             pos.Yaw = prevYaw;
@@ -265,9 +312,7 @@ public class EntityPlayerPhysics : EntityControlledPhysics, IRenderer
     public float accum = 0;
     public float interval = 1 / 60f;
 
-    /// <summary>
-    /// Do physics every frame on the client.
-    /// </summary>
+    // Do physics every frame on the client.
     public void OnRenderFrame(float dt, EnumRenderStage stage)
     {
         if (capi.IsGamePaused) return;
@@ -276,9 +321,9 @@ public class EntityPlayerPhysics : EntityControlledPhysics, IRenderer
         if (capi.World.Player.Entity != entity)
         {
             remote = true;
+            smoothStepping = false;
             capi.Event.UnregisterRenderer(this, EnumRenderStage.Before);
             physicsModules.Clear();
-            smoothStepping = false;
             return;
         }
 
@@ -311,5 +356,6 @@ public class EntityPlayerPhysics : EntityControlledPhysics, IRenderer
 
     public void Dispose()
     {
+
     }
 }

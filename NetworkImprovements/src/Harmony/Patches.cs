@@ -1,11 +1,37 @@
 ﻿using HarmonyLib;
+using Vintagestory.API.Client;
 using Vintagestory.API.Common;
 using Vintagestory.API.Common.Entities;
+using Vintagestory.Client;
+using Vintagestory.Client.NoObf;
 using Vintagestory.GameContent;
 using Vintagestory.Server;
 
 public class Patches
 {
+    // Notify server of teleportation.
+    // Client-side only for the client player.
+    // Add a version so it's not thrown away.
+    [HarmonyPatch(typeof(EntityPlayer), "OnReceivedServerPacket")]
+    public static class ReceivedPacketPostfix
+    {
+        [HarmonyPostfix]
+        public static void Postfix(EntityPlayer __instance, int packetid)
+        {
+            if (packetid != 1) return;
+
+            ICoreClientAPI capi = __instance.Api as ICoreClientAPI;
+
+            if (__instance == capi.World.Player.Entity)
+            {
+                Packet_Client packet = ClientPackets.PlayerPosition(capi.World.Player.Entity);
+                packet.PlayerPosition.PositionVersionNumber += 1;
+
+                (capi.World as ClientMain).SendPacketClient(packet);
+            }
+        }
+    }
+
     // Postfix of the server receiving the client's position. Will call something in player physics.
     [HarmonyPatch(typeof(ServerSystemEntitySimulation), "HandlePlayerPosition")]
     public static class HandlePlayerPositionPostfix
@@ -13,7 +39,7 @@ public class Patches
         [HarmonyPostfix]
         public static void Postfix(Packet_Client packet, ConnectedClient client)
         {
-            client.Player.Entity.GetBehavior<EntityPlayerPhysics>().OnReceivedClientPos();
+            client.Player.Entity.GetBehavior<EntityPlayerPhysics>().OnReceivedClientPos(packet.PlayerPosition.PositionVersionNumber);
         }
     }
 
@@ -35,16 +61,24 @@ public class Patches
         [HarmonyPrefix]
         public static void Prefix(ServerSystemEntitySimulation __instance)
         {
+            ServerMain server = __instance.GetField<ServerMain>("server");
+
             // Set watched attribute on player dt float.
             // Now in receivedServerPos I can get the delta of the new value from the player.
             foreach (ConnectedClient client in __instance.GetField<ServerMain>("server").Clients.Values)
             {
+                ServerPlayer player = client.Player;
+
                 client?.Player?.Entity?.WatchedAttributes.SetFloat("lastDelta", dt);
+
+                // Time between the server receiving this entity's position and sending it. Subtracted from interval received by client.
+                client?.Player?.Entity?.WatchedAttributes.SetFloat("malus", server.ElapsedMilliseconds - player.LastReceivedClientPosition);
             }
         }
     }
 
     // Nametags and some positions break if the position is set here. I tried calling renderframe after received server pos in interpolation but it didn't help.
+    // ServerPos is handled in interpolation.
     [HarmonyPatch(typeof(Entity), "OnReceivedServerPos")]
     public static class MovedPrefix
     {
@@ -52,6 +86,7 @@ public class Patches
         public static bool Prefix(Entity __instance, bool isTeleport)
         {
             EnumHandling handled = EnumHandling.PassThrough;
+
             foreach (EntityBehavior behavior in __instance.SidedProperties.Behaviors)
             {
                 behavior.OnReceivedServerPos(isTeleport, ref handled);
@@ -61,6 +96,7 @@ public class Patches
                 }
             }
 
+            // Position not set automatically if the entity has interpolation.
             if (handled == EnumHandling.PassThrough && !__instance.HasBehavior<EntityInterpolation>())
             {
                 __instance.Pos.SetFrom(__instance.ServerPos);

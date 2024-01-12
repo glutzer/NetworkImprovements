@@ -23,6 +23,20 @@ public struct PositionSnapshot
 
         this.interval = interval;
     }
+
+    public PositionSnapshot(double x, double y, double z, float interval)
+    {
+        this.x = x;
+        this.y = y;
+        this.z = z;
+
+        this.interval = interval;
+    }
+
+    public readonly PositionSnapshot Clone()
+    {
+        return new PositionSnapshot(x, y, z, interval);
+    }
 }
 
 public class EntityInterpolation : EntityBehavior, IRenderer
@@ -78,7 +92,6 @@ public class EntityInterpolation : EntityBehavior, IRenderer
     public void PopQueue()
     {
         // Lerping only starts if pL is not null.
-        //if (pL != null)
         if (!awaitQueue)
         {
             dtAccum -= pN.interval;
@@ -92,7 +105,7 @@ public class EntityInterpolation : EntityBehavior, IRenderer
         pN = positionQueue.Dequeue();
 
         // Clear flooded queue.
-        while (positionQueue.Count > 1) PopQueue();
+        while (positionQueue.Count > 2) PopQueue();
     }
 
     public override void Initialize(EntityProperties properties, JsonObject attributes)
@@ -106,6 +119,7 @@ public class EntityInterpolation : EntityBehavior, IRenderer
     }
 
     public Action OnFirstReceived;
+    public float lastMalus;
 
     /// <summary>
     /// Called when the client receives a new position.
@@ -115,6 +129,15 @@ public class EntityInterpolation : EntityBehavior, IRenderer
     {
         // How long since the last update sent.
         float lastDelta = capi.World.Player.Entity.WatchedAttributes.GetFloat("lastDelta");
+
+        if (entity is EntityPlayer)
+        {
+            float malus = entity.WatchedAttributes.GetFloat("malus", 0) / 1000;
+            lastDelta -= malus;
+            lastDelta += lastMalus;
+            lastMalus = malus;
+        }
+
         PushQueue(new PositionSnapshot(entity.ServerPos, lastDelta));
 
         targetYaw = entity.ServerPos.Yaw;
@@ -146,10 +169,9 @@ public class EntityInterpolation : EntityBehavior, IRenderer
             return;
         }
 
-        //if (pL == null)
         if (awaitQueue)
         {
-            if (positionQueue.Count > 2)
+            if (positionQueue.Count > 3)
             {
                 awaitQueue = false;
                 PopQueue();
@@ -172,15 +194,21 @@ public class EntityInterpolation : EntityBehavior, IRenderer
             }
             else
             {
+                /*
                 lastIdle.Set(pN.x, pN.y, pN.z);
                 dtAccum = 0;
-                //pL = null;
+
                 awaitQueue = true;
                 return;
+                */
+
+
+                PushQueue(pN.Clone());
+                PopQueue();
             }
         }
 
-        if (positionQueue.Count > 1)
+        if (positionQueue.Count > 2)
         {
             PopQueue();
         }
@@ -193,9 +221,13 @@ public class EntityInterpolation : EntityBehavior, IRenderer
         {
             foreach (IMountable seat in mount.MountPoints)
             {
-                if (seat.MountedBy == capi.World.Player.Entity && seat.CanControl)
+                if (seat.MountedBy == capi.World.Player.Entity)
                 {
                     return;
+                }
+                else
+                {
+                    seat.MountedBy?.Pos.SetFrom(seat.MountPosition);
                 }
             }
         }
@@ -209,10 +241,6 @@ public class EntityInterpolation : EntityBehavior, IRenderer
             entity.Pos.Y = GameMath.Lerp(pL.y, pN.y, delta);
             entity.Pos.Z = GameMath.Lerp(pL.z, pN.z, delta);
         }
-
-        //entity.Pos.Yaw = GameMath.Lerp(pL.yaw, pN.yaw, delta);
-        //entity.Pos.Pitch = GameMath.Lerp(pL.pitch, pN.pitch, delta);
-        //entity.Pos.Roll = GameMath.Lerp(pL.roll, pN.roll, delta);
 
         entity.Pos.Yaw = LerpRotation(ref currentYaw, targetYaw, dt);
         entity.Pos.Pitch = LerpRotation(ref currentPitch, targetPitch, dt);

@@ -4,6 +4,7 @@ using System;
 using System.Collections.Generic;
 using Vintagestory.API.Client;
 using Vintagestory.API.Common;
+using Vintagestory.API.MathTools;
 using Vintagestory.API.Server;
 using Vintagestory.API.Util;
 using Vintagestory.Client.NoObf;
@@ -53,14 +54,13 @@ public class NIM : ModSystem
         mappingsTypeToBehavior.Remove(typeof(EntityControlledPhysics));
         api.RegisterEntityBehaviorClass("controlledphysics", typeof(EntityControlledPhysics));
 
-        // Used for falling blocks. Clean these up.
+        // Legacy physics for falling blocks and boats.
         api.RegisterEntityBehaviorClass("legacyinterpolateposition", typeof(EntityBehaviorInterpolatePosition));
         api.RegisterEntityBehaviorClass("legacypassivephysics", typeof(EntityBehaviorPassivePhysics));
 
         mappings.Remove("playerphysics");
         mappingsTypeToBehavior.Remove(typeof(EntityBehaviorPlayerPhysics));
         api.RegisterEntityBehaviorClass("playerphysics", typeof(EntityPlayerPhysics));
-        
     }
 
     public override void StartClientSide(ICoreClientAPI api)
@@ -113,14 +113,6 @@ public class NIM : ModSystem
         sapi.Event.PlayerJoin += UpdateTickrates;
 
         sapi.RegisterCommand(new TickrateCommand(this));
-
-        sapi.Event.RegisterGameTickListener((dt) =>
-        {
-            foreach (IPlayer player in sapi.World.AllPlayers)
-            {
-                Console.WriteLine($"{player.Entity.ServerPos.Motion}, {player.PlayerName}");
-            }
-        }, 500);
     }
 
     public void UpdateTickrates(IServerPlayer byPlayer)

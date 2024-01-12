@@ -9,16 +9,14 @@ using Vintagestory.Client.NoObf;
 using Vintagestory.Common;
 using Vintagestory.Server;
 
-/// <summary>
-/// Clients tick on main thread. Server load balances physics.
-/// </summary>
+// Load balanced on server.
 public class PhysicsManager : LoadBalancedTask, IRenderer
 {
     public Queue<IPhysicsTickable> toAdd = new();
     public Queue<IPhysicsTickable> toRemove = new();
 
-    //Interval at which physics are ticked
-    public float interval = 1 / 30f; //30 UPS
+    // Interval at which physics are ticked.
+    public float interval = 1 / 30f; // 30 UPS.
 
     public ICoreAPI api;
     public ICoreClientAPI capi;
@@ -31,11 +29,9 @@ public class PhysicsManager : LoadBalancedTask, IRenderer
 
     public float accumulation = 0;
 
-    //All tickable behaviors
+    // All tickable behaviors.
     public List<IPhysicsTickable> tickables = new();
     public int tickableCount = 0;
-
-    //Do physics after interpolation has occurred on the client
     public double RenderOrder => 1;
     public int RenderRange => 9999;
 
@@ -120,7 +116,7 @@ public class PhysicsManager : LoadBalancedTask, IRenderer
 
         if (accumulation > 1000)
         {
-            //Skip ticks
+            // Skip ticks.
             accumulation = 0;
         }
 
@@ -137,7 +133,7 @@ public class PhysicsManager : LoadBalancedTask, IRenderer
 
         loadBalancer.SynchroniseWorkToMainThread();
 
-        //Processes post-ticks at a thread-safe level
+        // Processes post-ticks at a thread-safe level.
         foreach (IPhysicsTickable tickable in tickables)
         {
             tickable.FlagTickDone = 0;
@@ -162,7 +158,7 @@ public class PhysicsManager : LoadBalancedTask, IRenderer
             tickable.OnPhysicsTick(interval);
         }
 
-        //Processes post-ticks at a thread-safe level
+        // Processes post-ticks at a thread-safe level.
         foreach (IPhysicsTickable tickable in tickables)
         {
             tickable.FlagTickDone = 0;
@@ -226,6 +222,6 @@ public class PhysicsManager : LoadBalancedTask, IRenderer
             (client.Api as ICoreClientAPI).Event.UnregisterRenderer(this, EnumRenderStage.Before);
         }
 
-        tickables.Clear(); //Might cause an error
+        tickables.Clear(); // Might cause an error?
     }
 }

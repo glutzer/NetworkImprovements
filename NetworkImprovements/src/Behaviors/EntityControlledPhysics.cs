@@ -8,9 +8,7 @@ using Vintagestory.API.Datastructures;
 using Vintagestory.API.MathTools;
 using Vintagestory.API.Server;
 
-/// <summary>
-/// New version of controlled physics only applied on the server.
-/// </summary>
+// New version of server-side controlled physics.
 public class EntityControlledPhysics : EntityBehavior, IPhysicsTickable
 {
     public ICoreClientAPI capi;
@@ -36,14 +34,9 @@ public class EntityControlledPhysics : EntityBehavior, IPhysicsTickable
     public List<FastVec3i> traversed = new(4);
     public IComparer<FastVec3i> fastVec3iComparer = new FastVec3iComparer();
 
-    /// <summary>
-    /// Data for minimal client physics.
-    /// Use last received position to calculate motion.
-    /// Will only be used on the thread handling network.
-    /// </summary>
+    // Used for calculating minimal physics and collision to trigger required things without doing a full simulation.
     public EntityPos lPos = new();
     public Vec3d nPos = new();
-    public long lastReceived = 0;
 
     private double prevYMotion;
     private bool onGroundBefore;
@@ -66,12 +59,17 @@ public class EntityControlledPhysics : EntityBehavior, IPhysicsTickable
         physicsModules.Add(new PModuleKnockback());
     }
 
-    /// <summary>
-    /// Called when entity spawns.
-    /// </summary>
     public override void Initialize(EntityProperties properties, JsonObject attributes)
     {
+        // Only logical on the server.
         if (entity.Api.Side == EnumAppSide.Server) remote = false;
+
+        stepHeight = attributes["stepHeight"].AsFloat(0.6f);
+
+        sneakTestCollisionbox = entity.CollisionBox.Clone().OmniNotDownGrowBy(-0.1f);
+        sneakTestCollisionbox.Y2 /= 2;
+
+        isMountable = entity is IMountable || entity is IMountableSupplier;
 
         if (!remote)
         {
@@ -79,25 +77,16 @@ public class EntityControlledPhysics : EntityBehavior, IPhysicsTickable
             SetModules();
         }
 
-        stepHeight = attributes["stepHeight"].AsFloat(0.6f);
-
         JsonObject physics = properties?.Attributes?["physics"];
         for (int i = 0; i < physicsModules.Count; i++)
         {
             physicsModules[i].Initialize(physics, entity);
         }
 
-        sneakTestCollisionbox = entity.CollisionBox.Clone().OmniNotDownGrowBy(-0.1f);
-        sneakTestCollisionbox.Y2 /= 2;
-
-        isMountable = entity is IMountable || entity is IMountableSupplier;
-
         if (entity.Api is ICoreClientAPI) capi = entity.Api as ICoreClientAPI;
         if (entity.Api is ICoreServerAPI) sapi = entity.Api as ICoreServerAPI;
 
-        if (capi != null) lastReceived = capi.InWorldEllapsedMilliseconds;
-
-        entity.PhysicsUpdateWatcher?.Invoke(0, entity.ServerPos.XYZ);
+        entity.PhysicsUpdateWatcher?.Invoke(0, entity.SidedPos.XYZ);
     }
 
     public override void OnReceivedServerPos(bool isTeleport, ref EnumHandling handled)
@@ -106,9 +95,8 @@ public class EntityControlledPhysics : EntityBehavior, IPhysicsTickable
 
         if (nPos == null) nPos.Set(entity.SidedPos);
 
-        float dt = (lastReceived - capi.InWorldEllapsedMilliseconds) / 1000f;
+        float dt = capi.World.Player.Entity.WatchedAttributes.GetFloat("lastDelta");
         float dtFactor = dt * 60;
-        lastReceived = capi.InWorldEllapsedMilliseconds;
 
         lPos.SetFrom(nPos);
         nPos.Set(entity.SidedPos);
@@ -122,6 +110,11 @@ public class EntityControlledPhysics : EntityBehavior, IPhysicsTickable
         {
             entity.Swimming = false;
             entity.OnGround = false;
+
+            if (capi != null)
+            {
+                entity.Pos.SetPos(agent.MountedOn.MountPosition);
+            }
 
             entity.SidedPos.Motion.X = 0;
             entity.SidedPos.Motion.Y = 0;
@@ -175,9 +168,6 @@ public class EntityControlledPhysics : EntityBehavior, IPhysicsTickable
         }
     }
 
-    /// <summary>
-    /// Called from load balancer for both sides.
-    /// </summary>
     public virtual void OnPhysicsTick(float dt)
     {
         if (entity.State != EnumEntityState.Active) return;
@@ -242,11 +232,6 @@ public class EntityControlledPhysics : EntityBehavior, IPhysicsTickable
         nextPos.Set(pos.X + moveDelta.X, pos.Y + moveDelta.Y, pos.Z + moveDelta.Z);
 
         bool falling = prevYMotion < 0;
-
-        if (pos.Motion.Y > 0)
-        {
-            int test = 1;
-        }
 
         controls.IsClimbing = false;
         entity.ClimbingOnFace = null;
