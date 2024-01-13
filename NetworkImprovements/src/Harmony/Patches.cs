@@ -6,6 +6,13 @@ using Vintagestory.API.Util;
 using Vintagestory.Client.NoObf;
 using Vintagestory.GameContent;
 
+// ONLY IMMEDIATELY SET POS OF CLIENT WHEN TELEPORTING.
+
+// DON'T SET POSITION OF ENTITIES RECEIVING A NEW POSITION IF THEY HAVE INTERPOLATION.
+
+// ADD CLASS TO CONTROLLED AI.
+// ADD CLASS TO PROJECTILES.
+// ADD CLASS TO STONES.
 public class Patches
 {
     // The new position should only be set on the client receiving it. This breaks interpolation otherwise.

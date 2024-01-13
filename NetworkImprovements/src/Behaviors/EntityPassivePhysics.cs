@@ -375,7 +375,7 @@ public class EntityPassivePhysics : EntityBehavior, IPhysicsTickable
     /// </summary>
     public override void OnEntityDespawn(EntityDespawnData despawn)
     {
-        NIM.RemovePhysicsTickable(entity.Api, this);
+        if (sapi != null) NIM.RemovePhysicsTickable(entity.Api, this);
     }
 
     public override string PropertyName()

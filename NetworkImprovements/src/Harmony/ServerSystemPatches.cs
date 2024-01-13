@@ -1,5 +1,4 @@
 ﻿using HarmonyLib;
-using System.Collections.Generic;
 using Vintagestory.API.Common;
 using Vintagestory.API.Common.Entities;
 using Vintagestory.API.Config;
@@ -8,6 +7,9 @@ using Vintagestory.API.Server;
 using Vintagestory.Common;
 using Vintagestory.Server;
 
+// COMBAT FIX.
+
+// REMOVE ATTRIBUTE SENDING IN INTERVAL.
 public class ServerSystemPatches
 {
     // Increase range at which hits are allowed, also increase valid picking range.
@@ -72,6 +74,8 @@ public class ServerSystemPatches
         }
     }
 
+    /*
+    //CLIENT PACKETS NO LONGER SENT
     // Call this if the version is correct. Does physics and broadcasts the newly received player position.
     [HarmonyPatch(typeof(ServerSystemEntitySimulation), "HandlePlayerPosition")]
     public static class HandlePlayerPositionPostfix
@@ -88,7 +92,7 @@ public class ServerSystemPatches
             if (playerPosition.PositionVersionNumber >= version)
             {
                 BroadcastNewPlayerPosition(client.Player.Entity, ___server);
-                client.Player.Entity.GetBehavior<EntityPlayerPhysics>().OnReceivedClientPos(packet.PlayerPosition.PositionVersionNumber);
+                client.Player.Entity.GetBehavior<EntityPlayerPhysics>().OnReceivedClientPos(packet.PlayerPosition.PositionVersionNumber, 0);
             }
         }
 
@@ -154,4 +158,5 @@ public class ServerSystemPatches
             }
         }
     }
+    */
 }

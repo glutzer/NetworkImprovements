@@ -21,6 +21,8 @@ public class EntityPlayerPhysics : EntityControlledPhysics, IRenderer
 
     public ClientMain clientMain;
 
+    public UDPNetwork udpNetwork;
+
     public EntityPlayerPhysics(Entity entity) : base(entity)
     {
         
@@ -55,6 +57,8 @@ public class EntityPlayerPhysics : EntityControlledPhysics, IRenderer
         {
             capi.Event.RegisterRenderer(this, EnumRenderStage.Before, "playerphysics");
             SetModules();
+            udpNetwork = capi.ModLoader.GetModSystem<NIM>().udpNetwork;
+            tick = entity.WatchedAttributes.GetInt("ct");
         }
 
         JsonObject physics = properties?.Attributes?["physics"];
@@ -79,7 +83,7 @@ public class EntityPlayerPhysics : EntityControlledPhysics, IRenderer
 
     public float updateInterval = 1 / 15f;
 
-    public void OnReceivedClientPos(int version)
+    public void OnReceivedClientPos(int version, int tickDiff)
     {
         if (!remote) return;
 
@@ -96,7 +100,7 @@ public class EntityPlayerPhysics : EntityControlledPhysics, IRenderer
             posVersion = version;
         }
 
-        HandleRemote(updateInterval, isTeleport);
+        HandleRemote(updateInterval * tickDiff, isTeleport);
     }
 
     public override void OnReceivedServerPos(bool isTeleport, ref EnumHandling handled)
@@ -105,7 +109,7 @@ public class EntityPlayerPhysics : EntityControlledPhysics, IRenderer
 
         //entity.Pos.SetFrom(entity.ServerPos);
 
-        HandleRemote(updateInterval, isTeleport);
+        HandleRemote(updateInterval * entity.WatchedAttributes.GetInt("tickDiff"), isTeleport);
     }
 
     public void HandleRemote(float dt, bool isTeleport)
@@ -308,6 +312,7 @@ public class EntityPlayerPhysics : EntityControlledPhysics, IRenderer
     public float accum = 0;
     public float interval = 1 / 60f;
     public int currentTick;
+    public int tick;
 
     // Do physics every frame on the client.
     public void OnRenderFrame(float dt, EnumRenderStage stage)
@@ -321,6 +326,7 @@ public class EntityPlayerPhysics : EntityControlledPhysics, IRenderer
             smoothStepping = false;
             capi.Event.UnregisterRenderer(this, EnumRenderStage.Before);
             physicsModules.Clear();
+            udpNetwork = null;
             return;
         }
 
@@ -342,7 +348,8 @@ public class EntityPlayerPhysics : EntityControlledPhysics, IRenderer
             {
                 if (clientMain.GetField<bool>("Spawned") && clientMain.EntityPlayer.Alive)
                 {
-                    clientMain.SendPacketClient(ClientPackets.PlayerPosition(clientMain.EntityPlayer));
+                    udpNetwork.SendPlayerPacket(tick);
+                    tick++;
                 }
             }
 

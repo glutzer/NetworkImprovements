@@ -97,7 +97,7 @@ public class EntityControlledPhysics : EntityBehavior, IPhysicsTickable
 
         if (nPos == null) nPos.Set(entity.SidedPos);
 
-        float dt = updateInterval;
+        float dt = updateInterval * entity.WatchedAttributes.GetInt("tickDiff");
         float dtFactor = dt * 60;
 
         lPos.SetFrom(nPos);
@@ -768,7 +768,7 @@ public class EntityControlledPhysics : EntityBehavior, IPhysicsTickable
     public volatile int serverPhysicsTickDone;
     public override void OnEntityDespawn(EntityDespawnData despawn)
     {
-        NIM.RemovePhysicsTickable(entity.Api, this);
+        if (sapi != null) NIM.RemovePhysicsTickable(entity.Api, this);
     }
 
     /// <summary>

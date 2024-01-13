@@ -6,7 +6,6 @@ using Vintagestory.API.Common.Entities;
 using Vintagestory.API.Datastructures;
 using Vintagestory.API.Server;
 using Vintagestory.API.Util;
-using Vintagestory.Client;
 using Vintagestory.Common;
 using Vintagestory.Server;
 
@@ -17,15 +16,15 @@ public class PhysicsManager : LoadBalancedTask
     public Queue<IPhysicsTickable> toRemove = new();
 
     // Interval at which physics are ticked.
-    public float interval = 1 / 30f; // 30 UPS.
+    public float interval = 1 / 30f;
 
-    public ICoreAPI api;
+    public ICoreServerAPI sapi;
+    public UDPNetwork udpNetwork;
 
     public ServerMain server;
+    public LoadBalancer loadBalancer;
 
     public long listener;
-
-    public LoadBalancer loadBalancer;
 
     public float accumulation = 0;
 
@@ -35,21 +34,23 @@ public class PhysicsManager : LoadBalancedTask
 
     public ServerSystemEntitySimulation es;
 
-    public PhysicsManager(ICoreAPI api)
+    public PhysicsManager(ICoreServerAPI sapi, UDPNetwork udpNetwork)
     {
-        this.api = api;
+        this.sapi = sapi;
+        this.udpNetwork = udpNetwork;
+
         int threadCount = Math.Min(8, MagicNum.MaxPhysicsThreads);
 
-        if (api is ICoreServerAPI sapi)
-        {
-            server = sapi.World as ServerMain;
-            loadBalancer = new LoadBalancer(this, ServerMain.Logger);
-            loadBalancer.CreateDedicatedThreads(threadCount, "physicsManager", server.Serverthreads);
-            listener = server.RegisterGameTickListener(ServerTick, 10);
+        server = sapi.World as ServerMain;
+        loadBalancer = new LoadBalancer(this, ServerMain.Logger);
+        loadBalancer.CreateDedicatedThreads(threadCount, "physicsManager", server.Serverthreads);
 
-            es = server.GetField<ServerSystem[]>("Systems")[6] as ServerSystemEntitySimulation;
-            GrabFields();
-        }
+        // Register to tick every tick.
+        listener = server.RegisterGameTickListener(ServerTick, 1);
+
+        es = server.GetField<ServerSystem[]>("Systems")[6] as ServerSystemEntitySimulation;
+
+        GrabFields();
     }
 
     private List<KeyValuePair<Entity, EntityDespawnData>> entitiesNowOutOfRange;
@@ -77,7 +78,68 @@ public class PhysicsManager : LoadBalancedTask
         loadedEntities = server.GetField<CachingConcurrentDictionary<long, Entity>>("LoadedEntities");
     }
 
-    public void UpdateEntityPositions()
+    int tick = 0;
+
+    // Update positions on UDP.
+    public void UpdatePositions()
+    {
+        tick++;
+
+        foreach (ConnectedClient client in server.Clients.Values)
+        {
+            if (client.State != EnumClientState.Connected && client.State != EnumClientState.Playing)
+            {
+                continue;
+            }
+
+            entitiesPositionupdate.Clear();
+            entitiesPositionMinimalupdate.Clear();
+
+            foreach (Entity entity in loadedEntities.Values)
+            {
+                if (entity is EntityPlayer) continue;
+
+                if (entity == client.Player.Entity) continue;
+
+                bool trackedByClient = client.TrackedEntities.ContainsKey(entity.EntityId);
+                bool noChunk = !client.DidSendChunk(entity.InChunkIndex3d) && entity.EntityId != client.Player.Entity.EntityId;
+                if (noChunk && !trackedByClient) continue;
+
+                EntityAgent entityAgent = entity as EntityAgent;
+                if ((entity.AnimManager != null && entity.AnimManager.AnimationsDirty) || entity.IsTeleport)
+                {
+                    entitiesPositionupdate.Add(entity);
+                }
+                else if (!entity.ServerPos.BasicallySameAs(entity.PreviousServerPos, 0.002) || (entityAgent != null && entityAgent.Controls.Dirty))
+                {
+                    entitiesPositionMinimalupdate.Add(entity);
+                }
+            }
+
+            BulkPositionPacket bulkPositionPacket = new()
+            {
+                packets = new PositionPacket[entitiesPositionupdate.Count],
+                minPackets = new MinPositionPacket[entitiesPositionMinimalupdate.Count]
+            };
+
+            int i = 0;
+            foreach (Entity entity in entitiesPositionupdate)
+            {
+                bulkPositionPacket.packets[i++] = new PositionPacket(entity, tick);
+            }
+
+            i = 0;
+            foreach (Entity entity in entitiesPositionMinimalupdate)
+            {
+                bulkPositionPacket.minPackets[i++] = new MinPositionPacket(entity, tick);
+            }
+
+            udpNetwork.SendToClient(bulkPositionPacket);
+        }
+    }
+
+    // Update attributes on TCP.
+    public void UpdateAttributes()
     {
         foreach (ConnectedClient client in server.Clients.Values)
         {
@@ -88,10 +150,10 @@ public class PhysicsManager : LoadBalancedTask
 
             entitiesNowInRange.Clear();
             entitiesNowOutOfRange.Clear();
-            entitiesFullUpdate.Clear();
-            entitiesPartialUpdate.Clear();
             entitiesPositionupdate.Clear();
             entitiesPositionMinimalupdate.Clear();
+            entitiesFullUpdate.Clear();
+            entitiesPartialUpdate.Clear();
             entitiesFullDebugUpdate.Clear();
             entitiesPartialDebugUpdate.Clear();
 
@@ -158,24 +220,11 @@ public class PhysicsManager : LoadBalancedTask
                         entitiesPartialDebugUpdate.Add(entity);
                     }
                 }
-
-                // Player updates sent elsewhere to sync better.
-                if (entity is EntityPlayer) continue;
-
-                EntityAgent entityAgent = entity as EntityAgent;
-                if ((entity.AnimManager != null && entity.AnimManager.AnimationsDirty) || entity.IsTeleport)
-                {
-                    entitiesPositionupdate.Add(entity);
-                }
-                else if (!entity.ServerPos.BasicallySameAs(entity.PreviousServerPos, 0.002) || (entityAgent != null && entityAgent.Controls.Dirty))
-                {
-                    entitiesPositionMinimalupdate.Add(entity);
-                }
             }
 
-            foreach (Entity item in entitiesNowInRange)
+            foreach (Entity nowInRange in entitiesNowInRange)
             {
-                if (item is EntityPlayer entityPlayer)
+                if (nowInRange is EntityPlayer entityPlayer)
                 {
                     server.PlayersByUid.TryGetValue(entityPlayer.PlayerUID, out var value);
                     if (value != null)
@@ -184,10 +233,10 @@ public class PhysicsManager : LoadBalancedTask
                     }
                 }
 
-                server.SendPacket(client.Id, ServerPackets.GetFullEntityPacket(item));
+                server.SendPacket(client.Id, ServerPackets.GetFullEntityPacket(nowInRange));
             }
 
-            if (entitiesFullUpdate.Count > 0 || entitiesPartialUpdate.Count > 0 || entitiesPositionupdate.Count > 0 || entitiesPositionMinimalupdate.Count > 0)
+            if (entitiesFullUpdate.Count > 0 || entitiesPartialUpdate.Count > 0)
             {
                 server.SendPacket(client.Id, ServerPackets.GetBulkEntityAttributesPacket(entitiesFullUpdate, entitiesPartialUpdate, entitiesPositionupdate, entitiesPositionMinimalupdate));
             }
@@ -261,9 +310,13 @@ public class PhysicsManager : LoadBalancedTask
     public void DoServerTick()
     {
         currentTick++;
+        if (currentTick % 10 == 0)
+        {
+            UpdateAttributes();
+        }
         if (currentTick % 2 == 0)
         {
-            UpdateEntityPositions(); // 15 times/s instead of 5 times/s, exactly after physics ticks.
+            UpdatePositions();
         }
 
         if (tickableCount == 0) return;
@@ -328,13 +381,10 @@ public class PhysicsManager : LoadBalancedTask
         loadBalancer.WorkerThreadLoop(threadNum);
     }
 
-    /// <summary>
-    /// Dispose when reloading or shutting down.
-    /// </summary>
     public void Dispose()
     {
         server?.UnregisterGameTickListener(listener);
 
-        tickables.Clear(); // Might cause an error?
+        tickables.Clear(); // Race condition?
     }
 }

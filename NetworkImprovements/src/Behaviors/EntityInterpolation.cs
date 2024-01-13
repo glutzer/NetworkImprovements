@@ -136,9 +136,6 @@ public class EntityInterpolation : EntityBehavior, IRenderer
     }
 
     public Action OnFirstReceived;
-    public float lastMalus;
-
-    public long lastReceived = 0;
 
     /// <summary>
     /// Called when the client receives a new position.
@@ -146,10 +143,7 @@ public class EntityInterpolation : EntityBehavior, IRenderer
     /// </summary>
     public override void OnReceivedServerPos(bool isTeleport, ref EnumHandling handled)
     {
-        PushQueue(new PositionSnapshot(entity.ServerPos, interval));
-
-        Console.WriteLine(capi.InWorldEllapsedMilliseconds - lastReceived);
-        lastReceived = capi.InWorldEllapsedMilliseconds;
+        PushQueue(new PositionSnapshot(entity.ServerPos, interval * entity.WatchedAttributes.GetInt("tickDiff")));
 
         targetYaw = entity.ServerPos.Yaw;
         targetPitch = entity.ServerPos.Pitch;
