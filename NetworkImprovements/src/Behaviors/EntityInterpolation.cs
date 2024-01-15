@@ -108,7 +108,7 @@ public class EntityInterpolation : EntityBehavior, IRenderer
         pN = positionQueue.Dequeue();
 
         // Clear flooded queue.
-        while (positionQueue.Count > 1) PopQueue();
+        while (positionQueue.Count > 2) PopQueue();
     }
 
     public override void Initialize(EntityProperties properties, JsonObject attributes)
@@ -144,6 +144,8 @@ public class EntityInterpolation : EntityBehavior, IRenderer
     public override void OnReceivedServerPos(bool isTeleport, ref EnumHandling handled)
     {
         PushQueue(new PositionSnapshot(entity.ServerPos, interval * entity.WatchedAttributes.GetInt("tickDiff")));
+
+        Console.WriteLine($"{entity.WatchedAttributes.GetInt("tickDiff")}");
 
         targetYaw = entity.ServerPos.Yaw;
         targetPitch = entity.ServerPos.Pitch;
@@ -184,7 +186,7 @@ public class EntityInterpolation : EntityBehavior, IRenderer
 
         if (awaitQueue)
         {
-            if (positionQueue.Count > 2)
+            if (positionQueue.Count > 3)
             {
                 awaitQueue = false;
                 PopQueue();
@@ -207,6 +209,8 @@ public class EntityInterpolation : EntityBehavior, IRenderer
             }
             else
             {
+                Console.WriteLine($"None left, awaiting.");
+
                 lastIdle.Set(pN.x, pN.y, pN.z);
                 dtAccum = 0;
 
@@ -215,8 +219,9 @@ public class EntityInterpolation : EntityBehavior, IRenderer
             }
         }
 
-        if (positionQueue.Count > 1)
+        if (positionQueue.Count > 2)
         {
+            Console.WriteLine($"Too many, popping in render. {(1/15f - dtAccum) * 1000} ms remaining.");
             PopQueue();
         }
 
@@ -260,10 +265,7 @@ public class EntityInterpolation : EntityBehavior, IRenderer
 
             if (agent != null)
             {
-                double percentBodyYawDiff = Math.Abs(GameMath.AngleRadDistance(agent.BodyYaw, agent.BodyYawServer)) * dt / 0.1f;
-                int signY = Math.Sign(percentBodyYawDiff);
-                agent.BodyYaw += 0.6f * (float)GameMath.Clamp(GameMath.AngleRadDistance(agent.BodyYaw, agent.BodyYawServer), -signY * percentBodyYawDiff, signY * percentBodyYawDiff);
-                agent.BodyYaw %= GameMath.TWOPI;
+                agent.BodyYaw = LerpRotation(ref currentBodyYaw, targetBodyYaw, dt);
             }
         }
     }

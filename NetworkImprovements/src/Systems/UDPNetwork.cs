@@ -1,5 +1,4 @@
-﻿using ProtoBuf;
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Net;
 using System.Net.Sockets;
@@ -9,8 +8,8 @@ using Vintagestory.API.Common;
 using Vintagestory.API.Common.Entities;
 using Vintagestory.API.Server;
 using Vintagestory.API.Util;
+using Vintagestory.Client;
 using Vintagestory.Client.NoObf;
-using Vintagestory.Common;
 using Vintagestory.Server;
 
 public class UDPNetwork
@@ -21,104 +20,143 @@ public class UDPNetwork
     public ClientMain client;
     public ServerMain server;
 
-    public int serverPort = 42420;
-    public int clientPort = 41420;
+    public Action<byte[]>[] clientHandlers = new Action<byte[]>[128];
+    public Action<byte[], IServerPlayer>[] serverHandlers = new Action<byte[], IServerPlayer>[128];
 
-    public IPAddress serverIp = IPAddress.Loopback;
+    public bool connected = false;
+
+    public IPAddress serverIp;
+    public int serverPort = 42420;
 
     // Sending data.
-    public Socket sender = new(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp);
-    public IPEndPoint endPoint;
+    public UdpClient udpClient;
 
     public UDPNetwork(ICoreAPI api)
     {
         if (api is ICoreClientAPI clientApi)
         {
+            clientHandlers[1] = HandleBulkPacket;
+
             capi = clientApi;
             client = capi.World as ClientMain;
             client.RegisterGameTickListener(ClientTick, 1);
 
-            endPoint = new(serverIp, serverPort);
+            GuiScreenRunningGame gui = client.GetField<GuiScreenRunningGame>("ScreenRunningGame");
+            if (client.GetField<bool>("IsSingleplayer"))
+            {
+                serverIp = IPAddress.Loopback;
+                serverPort = 42420;
+            }
+            else
+            {
+                ServerConnectData connectData = client.GetField<ServerConnectData>("Connectdata");
+                serverIp = IPAddress.Parse(connectData.Host);
+                serverPort = connectData.Port;
+            }
 
-            // Start client listener.
-            Thread thread = new(new ThreadStart(ListenClient));
-            thread.Start();
+            udpClient = new();
+            udpClient.Connect(serverIp, serverPort);
+
+            ListenClient();
         }
 
         if (api is ICoreServerAPI serverApi)
         {
+            udpClient = new UdpClient(serverPort);
+
+            serverHandlers[1] = HandlePlayerPosition;
+
             sapi = serverApi;
             server = sapi.World as ServerMain;
             server.RegisterGameTickListener(ServerTick, 1);
 
-            endPoint = new(serverIp, clientPort);
-
-            // Start server listener.
-            Thread thread = new(new ThreadStart(ListenServer));
-            thread.Start();
+            ListenServer();
         }
     }
 
     public object messageLock = new();
-    public Queue<BulkPositionPacket> clientPacketQueue = new();
-    public Queue<PositionPacket> serverPacketQueue = new();
+    public Queue<UDPPacket> clientPacketQueue = new();
+    public Queue<UDPPacket> serverPacketQueue = new();
+
+    public Dictionary<long, IServerPlayer> connectingClients = new();
+    public Dictionary<IServerPlayer, IPEndPoint> connectedClients = new();
+    public Dictionary<IPEndPoint, IServerPlayer> endPoints = new();
+
+    public IPEndPoint groupEp = new(IPAddress.Any, 0);
+    public byte[] dataBuffer;
 
     // LISTEN FOR MESSAGES AND ENQUEUE.
 
     public void ListenClient()
     {
-        UdpClient listener = new(clientPort);
-        IPEndPoint groupEp = new(IPAddress.Any, clientPort);
+        udpClient.BeginReceive(new AsyncCallback(ClientReceiveCallback), null);
+    }
 
+    public void ClientReceiveCallback(IAsyncResult ar)
+    {
         try
         {
-            while (true)
+            dataBuffer = udpClient.EndReceive(ar, ref groupEp);
+
+            UDPPacket packet = SerializerUtil.Deserialize<UDPPacket>(dataBuffer);
+
+            lock (messageLock)
             {
-                byte[] bytes = listener.Receive(ref groupEp);
-
-                lock (messageLock)
-                {
-                    BulkPositionPacket packet = SerializerUtil.Deserialize<BulkPositionPacket>(bytes);
-                    clientPacketQueue.Enqueue(packet);
-                }
-
-                Console.WriteLine($"Received packet from id {groupEp}");
+                if (packet != null) clientPacketQueue.Enqueue(packet);
             }
+
+            udpClient.BeginReceive(new AsyncCallback(ClientReceiveCallback), null);
         }
-        catch (SocketException e)
+        catch (Exception e)
         {
-            Console.WriteLine(e);
+
         }
         finally
         {
-            listener.Close();
+
         }
     }
 
     public void ListenServer()
     {
-        UdpClient listener = new(serverPort);
-        IPEndPoint groupEp = new(IPAddress.Any, serverPort);
+        udpClient.BeginReceive(new AsyncCallback(ServerReceiveCallback), null);
+    }
 
+    public void ServerReceiveCallback(IAsyncResult ar)
+    {
         try
         {
-            while (true)
-            {
-                byte[] bytes = listener.Receive(ref groupEp);
+            dataBuffer = udpClient.EndReceive(ar, ref groupEp);
 
-                lock (messageLock)
+            UDPPacket packet = SerializerUtil.Deserialize<UDPPacket>(dataBuffer);
+
+            if (packet?.id == 0)
+            {
+                HandleConnectionRequest(packet.data, new IPEndPoint(groupEp.Address, groupEp.Port));
+            }
+            else
+            {
+                IServerPlayer sp = endPoints.Get(groupEp); // Race condition?
+                if (sp != null && packet != null)
                 {
-                    serverPacketQueue.Enqueue(SerializerUtil.Deserialize<PositionPacket>(bytes));
+                    packet.player = sp;
+
+                    lock (messageLock)
+                    {
+                        serverPacketQueue.Enqueue(packet);
+                    }
                 }
             }
+
+            udpClient.BeginReceive(new AsyncCallback(ServerReceiveCallback), null);
         }
-        catch (SocketException e)
+        catch (Exception e)
         {
-            Console.WriteLine(e);
+
         }
         finally
         {
-            listener.Close();
+            
         }
     }
 
@@ -130,129 +168,43 @@ public class UDPNetwork
         {
             while (clientPacketQueue.Count > 0)
             {
-                BulkPositionPacket bulkPacket = clientPacketQueue.Dequeue();
-
-                if (bulkPacket.packets != null)
-                {
-                    foreach (PositionPacket packet in bulkPacket.packets)
-                    {
-                        Entity entity = client.GetEntityById(packet.entityId);
-                        if (entity == null) continue;
-                        EntityPos pos = entity.ServerPos;
-
-                        // Tick info.
-                        int lastTick = entity.WatchedAttributes.GetInt("lastTick", 0);
-                        if (packet.tick < lastTick) continue;
-                        if (lastTick == 0) lastTick = packet.tick - 1;
-                        entity.WatchedAttributes.SetInt("tickDiff", packet.tick - lastTick);
-                        entity.WatchedAttributes.SetInt("lastTick", packet.tick);
-
-                        pos.X = packet.x;
-                        pos.Y = packet.y;
-                        pos.Z = packet.z;
-
-                        pos.Yaw = packet.yaw;
-                        pos.Pitch = packet.pitch;
-                        pos.Roll = packet.roll;
-
-                        if (entity is EntityAgent agent)
-                        {
-                            pos.HeadYaw = packet.headYaw;
-                            pos.HeadPitch = packet.headPitch;
-                            agent.BodyYaw = packet.bodyYaw;
-
-                            // Sets main controls, then server controls if not the player.
-                            agent.Controls.FromInt(packet.controls & 0x210);
-                            if (agent.EntityId != client.EntityPlayer.EntityId)
-                            {
-                                agent.ServerControls.FromInt(packet.controls);
-                            }
-                        }
-
-                        entity.OnReceivedServerPos(packet.teleport);
-
-                        // Animations.
-                        if (entity.Properties?.Client?.LoadedShapeForEntity?.Animations != null)
-                        {
-                            float[] speeds = new float[packet.activeAnimationSpeedsCount];
-                            for (int i = 0; i < speeds.Length; i++)
-                            {
-                                speeds[i] = CollectibleNet.DeserializeFloatPrecise(packet.activeAnimationSpeeds[i]);
-                            }
-
-                            entity.OnReceivedServerAnimations(packet.activeAnimations, packet.activeAnimationsCount, speeds);
-                        }
-                    }
-                }
-
-                if (bulkPacket.minPackets != null)
-                {
-                    foreach (MinPositionPacket packet in bulkPacket.minPackets)
-                    {
-                        Entity entity = client.GetEntityById(packet.entityId);
-                        if (entity == null) continue;
-                        EntityPos pos = entity.ServerPos;
-
-                        // Tick info.
-                        int lastTick = entity.WatchedAttributes.GetInt("lastTick", 0);
-                        if (packet.tick < lastTick) continue;
-                        if (lastTick == 0) lastTick = packet.tick - 1;
-                        entity.WatchedAttributes.SetInt("tickDiff", packet.tick - lastTick);
-                        entity.WatchedAttributes.SetInt("lastTick", packet.tick);
-
-                        pos.X = packet.x;
-                        pos.Y = packet.y;
-                        pos.Z = packet.z;
-
-                        pos.Yaw = packet.yaw;
-                        pos.Pitch = packet.pitch;
-                        pos.Roll = packet.roll;
-
-                        if (entity is EntityAgent agent)
-                        {
-                            pos.HeadYaw = packet.headYaw;
-                            pos.HeadPitch = packet.headPitch;
-                            agent.BodyYaw = packet.bodyYaw;
-                        }
-
-                        entity.OnReceivedServerPos(false);
-                    }
-                }
+                UDPPacket packet = clientPacketQueue.Dequeue();
+                clientHandlers[packet.id](packet.data);
             }
         }
     }
-    
-    // Player positions.
-    // Tick is set in player physics once when initialized.
-    // Tick is increased every time a position is sent. 1 / 15f interval.
+
     public void ServerTick(float dt)
     {
         lock (messageLock)
         {
             while (serverPacketQueue.Count > 0)
             {
-                PositionPacket packet = serverPacketQueue.Dequeue();
+                UDPPacket packet = serverPacketQueue.Dequeue();
+                serverHandlers[packet.id](packet.data, packet.player);
+            }
+        }
+    }
 
-                if (packet == null) continue;
+    // Handle bulk positions on client.
+    public void HandleBulkPacket(byte[] bytes)
+    {
+        BulkPositionPacket bulkPacket = SerializerUtil.Deserialize<BulkPositionPacket>(bytes);
 
-                if (sapi.World.GetEntityById(packet.entityId) is not EntityPlayer entity) continue;
-
-                ServerPlayer player = entity.Player as ServerPlayer;
-
-                // Check version.
-                int version = entity.WatchedAttributes.GetInt("positionVersionNumber");
-                if (packet.positionVersion < version) continue;
-
-                // Check tick.
-                int tick = entity.WatchedAttributes.GetInt("ct");
-                if (tick > packet.tick) continue;
-                entity.WatchedAttributes.SetInt("ct", packet.tick);
-                int tickDiff = packet.tick - tick;
-
-                player.LastReceivedClientPosition = server.ElapsedMilliseconds;
-
-                // Set entity server position.
+        if (bulkPacket.packets != null)
+        {
+            foreach (PositionPacket packet in bulkPacket.packets)
+            {
+                Entity entity = client.GetEntityById(packet.entityId);
+                if (entity == null) continue;
                 EntityPos pos = entity.ServerPos;
+
+                // Tick info.
+                int lastTick = entity.WatchedAttributes.GetInt("lastTick", 0);
+                if (packet.tick < lastTick) continue;
+                if (lastTick == 0) lastTick = packet.tick - 1;
+                entity.WatchedAttributes.SetInt("tickDiff", packet.tick - lastTick);
+                entity.WatchedAttributes.SetInt("lastTick", packet.tick);
 
                 pos.X = packet.x;
                 pos.Y = packet.y;
@@ -262,216 +214,215 @@ public class UDPNetwork
                 pos.Pitch = packet.pitch;
                 pos.Roll = packet.roll;
 
-                pos.HeadYaw = packet.headYaw;
-                pos.HeadPitch = packet.headPitch;
-                entity.BodyYaw = packet.bodyYaw;
-
-                // Set entity local position.
-                entity.Pos.SetFrom(entity.ServerPos);
-                entity.Pos.SetAngles(entity.ServerPos);
-
-                // Call physics.
-                entity.GetBehavior<EntityPlayerPhysics>().OnReceivedClientPos(version, tickDiff);
-
-                // Broadcast position to other players.
-                // ----------
-
-                BulkPositionPacket bulkPositionPacket = new()
+                if (entity is EntityAgent agent)
                 {
-                    packets = new PositionPacket[1],
-                    minPackets = new MinPositionPacket[0]
-                };
+                    pos.HeadYaw = packet.headYaw;
+                    pos.HeadPitch = packet.headPitch;
+                    agent.BodyYawServer = packet.bodyYaw;
 
-                bulkPositionPacket.packets[0] = new(entity, tick);
+                    // Sets main controls, then server controls if not the player.
+                    agent.Controls.FromInt(packet.controls & 0x210);
+                    if (agent.EntityId != client.EntityPlayer.EntityId)
+                    {
+                        agent.ServerControls.FromInt(packet.controls);
+                    }
+                }
 
-                //SendToClient(bulkPositionPacket);
+                entity.OnReceivedServerPos(packet.teleport);
+            }
+        }
+
+        if (bulkPacket.minPackets != null)
+        {
+            foreach (MinPositionPacket packet in bulkPacket.minPackets)
+            {
+                Entity entity = client.GetEntityById(packet.entityId);
+                if (entity == null) continue;
+                EntityPos pos = entity.ServerPos;
+
+                // Tick info.
+                int lastTick = entity.WatchedAttributes.GetInt("lastTick", 0);
+                if (packet.tick < lastTick) continue;
+                if (lastTick == 0) lastTick = packet.tick - 1;
+                entity.WatchedAttributes.SetInt("tickDiff", packet.tick - lastTick);
+                entity.WatchedAttributes.SetInt("lastTick", packet.tick);
+
+                pos.X = packet.x;
+                pos.Y = packet.y;
+                pos.Z = packet.z;
+
+                pos.Yaw = packet.yaw;
+                pos.Pitch = packet.pitch;
+                pos.Roll = packet.roll;
+
+                if (entity is EntityAgent agent)
+                {
+                    pos.HeadYaw = packet.headYaw;
+                    pos.HeadPitch = packet.headPitch;
+                    agent.BodyYawServer = packet.bodyYaw;
+                }
+
+                entity.OnReceivedServerPos(false);
             }
         }
     }
 
-    // Broadcast message to all clients on the server.
-    public void Broadcast()
+    public void HandlePlayerPosition(byte[] bytes, IServerPlayer player)
     {
+        PositionPacket packet = SerializerUtil.Deserialize<PositionPacket>(bytes);
 
+        if (packet == null) return;
+
+        if (sapi.World.GetEntityById(packet.entityId) is not EntityPlayer entity) return;
+
+        ServerPlayer serverPlayer = entity.Player as ServerPlayer;
+
+        // Check version.
+        int version = entity.WatchedAttributes.GetInt("positionVersionNumber");
+        if (packet.positionVersion < version) return;
+
+        // Check tick.
+        int tick = entity.WatchedAttributes.GetInt("ct");
+        if (tick > packet.tick) return;
+        entity.WatchedAttributes.SetInt("ct", packet.tick);
+        int tickDiff = packet.tick - tick;
+
+        serverPlayer.LastReceivedClientPosition = server.ElapsedMilliseconds;
+
+        // Set entity server position.
+        EntityPos pos = entity.ServerPos;
+
+        pos.X = packet.x;
+        pos.Y = packet.y;
+        pos.Z = packet.z;
+
+        pos.Yaw = packet.yaw;
+        pos.Pitch = packet.pitch;
+        pos.Roll = packet.roll;
+
+        pos.HeadYaw = packet.headYaw;
+        pos.HeadPitch = packet.headPitch;
+        entity.BodyYawServer = packet.bodyYaw;
+
+        // Set entity local position.
+        entity.Pos.SetFrom(entity.ServerPos);
+        entity.Pos.SetAngles(entity.ServerPos);
+
+        // Call physics.
+        entity.GetBehavior<EntityPlayerPhysics>().OnReceivedClientPos(version, tickDiff);
+
+        // Broadcast position to other players.
+        BulkPositionPacket bulkPositionPacket = new()
+        {
+            packets = new PositionPacket[1],
+            minPackets = Array.Empty<MinPositionPacket>()
+        };
+        bulkPositionPacket.packets[0] = new(entity, tick);
+
+        byte[] packetBytes = MakePacket(1, bulkPositionPacket);
+
+        foreach (IServerPlayer sp in connectedClients.Keys)
+        {
+            if (sp.Entity == entity) continue;
+            SendToClient(packetBytes, sp);
+        }
+        entity.IsTeleport = false;
+
+        if (entity.AnimManager?.AnimationsDirty == true)
+        {
+            AnimationPacket[] packets = new AnimationPacket[1];
+            packets[0] = new AnimationPacket(entity);
+
+            BulkAnimationPacket bulkAnimationPacket = new()
+            {
+                packets = packets
+            };
+
+            foreach (IServerPlayer sp in connectedClients.Keys)
+            {
+                if (sp.Entity == entity) continue;
+                sapi.ModLoader.GetModSystem<NIM>().serverChannel.SendPacket(bulkAnimationPacket, sp);
+            }
+
+            entity.AnimManager.AnimationsDirty = false;
+        }
     }
 
-    // Send message to specific client.
-    public void SendToClient(BulkPositionPacket bulkPositionPacket)
+    // Sends a connection packet to the server.
+    public void SendConnectionPacket()
     {
-        sender.SendTo(SerializerUtil.Serialize(bulkPositionPacket), endPoint);
+        ConnectionPacket connectionPacket = new(capi.World.Player.Entity.EntityId);
+        byte[] data = MakePacket(0, connectionPacket);
+        SendToServer(data);
     }
 
-    // Send message to server.
-    public void SendToServer(PositionPacket packet)
+    // Handle connection request through UDP.
+    public void HandleConnectionRequest(byte[] bytes, IPEndPoint endPoint)
     {
-        sender.SendTo(SerializerUtil.Serialize(packet), endPoint);
+        ConnectionPacket packet = SerializerUtil.Deserialize<ConnectionPacket>(bytes);
+        IServerPlayer player = connectingClients.Get(packet.entityId);
+        if (player == null || connectedClients.ContainsKey(player)) return;
+
+        // Kick illegal connections.
+        if (endPoint.Address != IPAddress.Parse(player.IpAddress))
+        {
+            Console.WriteLine($"Invalid connection: {endPoint.Address}, {IPAddress.Parse(player.IpAddress)}, {player.IpAddress}");
+        }
+
+        connectingClients.Remove(player.Entity.EntityId);
+        connectedClients.Add(player, endPoint);
+        endPoints.Add(endPoint, player);
+
+        NotificationPacket notificationPacket = new()
+        {
+            port = endPoint.Port
+        };
+
+        sapi.ModLoader.GetModSystem<NIM>().serverChannel.SendPacket(notificationPacket, player);
+    }
+
+    // Serialize a packet into a UDP packet with the id.
+    public static byte[] MakePacket<T>(byte id, T toSerialize)
+    {
+        UDPPacket packet = new(id, SerializerUtil.Serialize(toSerialize));
+        return SerializerUtil.Serialize(packet);
+    }
+
+    // Send packet to specific client.
+    public void SendToClient(byte[] data, IServerPlayer player)
+    {
+        IPEndPoint clientEndPoint = connectedClients.Get(player);
+        if (clientEndPoint == null) return;
+        udpClient.BeginSend(data, data.Length, clientEndPoint, (ar) =>
+        {
+            udpClient.EndSend(ar);
+        }, null);
+    }
+
+    // Send packet to server.
+    public void SendToServer(byte[] data)
+    {
+        udpClient.BeginSend(data, data.Length, (ar) =>
+        {
+            udpClient.EndSend(ar);
+        }, null);
     }
 
     public void SendPlayerPacket(int tick)
     {
         EntityPlayer player = capi.World.Player.Entity;
-
+        player.BodyYawServer = player.BodyYaw;
         PositionPacket packet = new(player, tick);
-
-        SendToServer(packet);
-    }
-}
-
-// For entities, sends them all in one packet.
-[ProtoContract(ImplicitFields = ImplicitFields.AllFields)]
-public class BulkPositionPacket
-{
-    public PositionPacket[] packets;
-    public MinPositionPacket[] minPackets;
-}
-
-// One position packet. When sent by client sets position on server for that player instead.
-[ProtoContract(ImplicitFields = ImplicitFields.AllFields)]
-public class PositionPacket
-{
-    public int tick;
-    public int positionVersion;
-    public long entityId;
-
-    public double x;
-    public double y;
-    public double z;
-
-    public float yaw;
-    public float pitch;
-    public float roll;
-
-    public float motionX;
-    public float motionY;
-    public float motionZ;
-
-    // Only for agent.
-    public float headYaw;
-    public float headPitch;
-    public float bodyYaw;
-
-    public bool teleport;
-
-    public int controls;
-
-    // Animations.
-    public int[] activeAnimations;
-    public int activeAnimationsCount;
-    public int activeAnimationsLength;
-    public int[] activeAnimationSpeeds;
-    public int activeAnimationSpeedsCount;
-    public int activeAnimationSpeedsLength;
-
-    public PositionPacket()
-    {
-
+        SendToServer(MakePacket(1, packet));
     }
 
-    public PositionPacket(Entity entity, int tick)
+    public void SendBulkPositionPacket(BulkPositionPacket packet, IServerPlayer player)
     {
-        this.tick = tick;
-
-        positionVersion = entity.WatchedAttributes.GetInt("positionVersionNumber", 0);
-
-        entityId = entity.EntityId;
-        EntityPos pos = entity.SidedPos;
-
-        x = pos.X;
-        y = pos.Y;
-        z = pos.Z;
-
-        yaw = pos.Yaw;
-        pitch = pos.Pitch;
-        roll = pos.Roll;
-
-        motionX = (float)pos.Motion.X;
-        motionY = (float)pos.Motion.Y;
-        motionZ = (float)pos.Motion.Z;
-
-        teleport = entity.IsTeleport;
-
-        if (entity is EntityAgent agent)
-        {
-            headYaw = pos.HeadYaw;
-            headPitch = pos.HeadPitch;
-            bodyYaw = agent.BodyYaw;
-
-            controls = agent.Controls.ToInt();
-        }
-
-        // Animations.
-
-        if (entity.AnimManager == null) return;
-        Dictionary<string, AnimationMetaData> activeAnimationsByAnimCode = entity.AnimManager.ActiveAnimationsByAnimCode;
-        if (activeAnimationsByAnimCode.Count <= 0) return;
-        int[] activeAnimationsArr = new int[activeAnimationsByAnimCode.Count];
-        int[] activeAnimationSpeedsArr = new int[activeAnimationsByAnimCode.Count];
-        int index = 0;
-        foreach (KeyValuePair<string, AnimationMetaData> anim in activeAnimationsByAnimCode)
-        {
-            if (!(anim.Value.TriggeredBy?.DefaultAnim ?? false))
-            {
-                activeAnimationSpeedsArr[index] = CollectibleNet.SerializeFloatPrecise(anim.Value.AnimationSpeed); // Test not serializing this float.
-                activeAnimationsArr[index++] = (int)anim.Value.CodeCrc32;
-            }
-        }
-        activeAnimations = activeAnimationsArr;
-        activeAnimationsCount = activeAnimationsArr.Length;
-        activeAnimationsLength = activeAnimationsArr.Length;
-        activeAnimationSpeeds = activeAnimationSpeedsArr;
-        activeAnimationSpeedsCount = activeAnimationSpeedsArr.Length;
-        activeAnimationSpeedsLength = activeAnimationSpeedsArr.Length;
-    }
-}
-
-[ProtoContract(ImplicitFields = ImplicitFields.AllFields)]
-public class MinPositionPacket
-{
-    public int tick;
-    public long entityId;
-
-    public double x;
-    public double y;
-    public double z;
-
-    public float yaw;
-    public float pitch;
-    public float roll;
-
-    // Only for agent.
-    public float headYaw;
-    public float headPitch;
-    public float bodyYaw;
-
-    public int controls;
-
-    public MinPositionPacket()
-    {
-
+        SendToClient(MakePacket(1, packet), player);
     }
 
-    public MinPositionPacket(Entity entity, int tick)
+    public void Dispose()
     {
-        this.tick = tick;
-        entityId = entity.EntityId;
-
-        EntityPos pos = entity.SidedPos;
-
-        x = pos.X;
-        y = pos.Y;
-        z = pos.Z;
-
-        yaw = pos.Yaw;
-        pitch = pos.Pitch;
-        roll = pos.Roll;
-
-        if (entity is EntityAgent agent)
-        {
-            headYaw = pos.HeadYaw;
-            headPitch = pos.HeadPitch;
-            bodyYaw = agent.BodyYaw;
-
-            controls = agent.Controls.ToInt();
-        }
+        udpClient.Close();
     }
 }

@@ -20,6 +20,7 @@ public class PhysicsManager : LoadBalancedTask
 
     public ICoreServerAPI sapi;
     public UDPNetwork udpNetwork;
+    public NIM system;
 
     public ServerMain server;
     public LoadBalancer loadBalancer;
@@ -34,10 +35,11 @@ public class PhysicsManager : LoadBalancedTask
 
     public ServerSystemEntitySimulation es;
 
-    public PhysicsManager(ICoreServerAPI sapi, UDPNetwork udpNetwork)
+    public PhysicsManager(ICoreServerAPI sapi, UDPNetwork udpNetwork, NIM system)
     {
         this.sapi = sapi;
         this.udpNetwork = udpNetwork;
+        this.system = system;
 
         int threadCount = Math.Min(8, MagicNum.MaxPhysicsThreads);
 
@@ -87,10 +89,7 @@ public class PhysicsManager : LoadBalancedTask
 
         foreach (ConnectedClient client in server.Clients.Values)
         {
-            if (client.State != EnumClientState.Connected && client.State != EnumClientState.Playing)
-            {
-                continue;
-            }
+            if (client.State != EnumClientState.Connected && client.State != EnumClientState.Playing) continue;
 
             entitiesPositionupdate.Clear();
             entitiesPositionMinimalupdate.Clear();
@@ -122,10 +121,17 @@ public class PhysicsManager : LoadBalancedTask
                 minPackets = new MinPositionPacket[entitiesPositionMinimalupdate.Count]
             };
 
+            BulkAnimationPacket bulkAnimationPacket = new()
+            {
+                packets = new AnimationPacket[entitiesPositionupdate.Count]
+            };
+
             int i = 0;
             foreach (Entity entity in entitiesPositionupdate)
             {
-                bulkPositionPacket.packets[i++] = new PositionPacket(entity, tick);
+                bulkPositionPacket.packets[i] = new PositionPacket(entity, tick);
+
+                bulkAnimationPacket.packets[i++] = new AnimationPacket(entity);
             }
 
             i = 0;
@@ -134,7 +140,17 @@ public class PhysicsManager : LoadBalancedTask
                 bulkPositionPacket.minPackets[i++] = new MinPositionPacket(entity, tick);
             }
 
-            udpNetwork.SendToClient(bulkPositionPacket);
+            system.serverChannel.SendPacket(bulkAnimationPacket, client.Player);
+            udpNetwork.SendBulkPositionPacket(bulkPositionPacket, client.Player);
+        }
+
+        foreach (Entity entity in loadedEntities.Values)
+        {
+            if (entity is EntityPlayer) continue;
+
+            if (entity.AnimManager != null) entity.AnimManager.AnimationsDirty = false;
+
+            entity.IsTeleport = false;
         }
     }
 
@@ -256,10 +272,6 @@ public class PhysicsManager : LoadBalancedTask
         {
             entity.WatchedAttributes.MarkClean();
 
-            if (entity.AnimManager != null) entity.AnimManager.AnimationsDirty = false;
-
-            entity.IsTeleport = false;
-
             if (entity is EntityAgent agent) agent.Controls.Dirty = false;
         }
     }
@@ -310,7 +322,7 @@ public class PhysicsManager : LoadBalancedTask
     public void DoServerTick()
     {
         currentTick++;
-        if (currentTick % 10 == 0)
+        if (currentTick % 4 == 0)
         {
             UpdateAttributes();
         }

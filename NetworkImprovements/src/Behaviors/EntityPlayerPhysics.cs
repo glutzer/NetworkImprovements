@@ -354,9 +354,12 @@ public class EntityPlayerPhysics : EntityControlledPhysics, IRenderer
             }
 
             // This should be in here right?
-            entity.PhysicsUpdateWatcher?.Invoke(accum, prevPos);
-            AfterPhysicsTick(dt);
+            AfterPhysicsTick(interval);
+
+            entity.PhysicsUpdateWatcher?.Invoke(interval, prevPos);
         }
+
+        
     }
 
     public double RenderOrder => 1;
