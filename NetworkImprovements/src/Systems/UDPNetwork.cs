@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Net;
 using System.Net.Sockets;
 using System.Threading;
@@ -189,6 +190,10 @@ public class UDPNetwork
     // Handle bulk positions on client.
     public void HandleBulkPacket(byte[] bytes)
     {
+        Random rand = new();
+
+        //if (rand.NextDouble() > 0.8) return;
+
         BulkPositionPacket bulkPacket = SerializerUtil.Deserialize<BulkPositionPacket>(bytes);
 
         if (bulkPacket.packets != null)
@@ -379,6 +384,8 @@ public class UDPNetwork
         };
 
         sapi.ModLoader.GetModSystem<NIM>().serverChannel.SendPacket(notificationPacket, player);
+
+        //watch.Start();
     }
 
     // Serialize a packet into a UDP packet with the id.
@@ -388,11 +395,27 @@ public class UDPNetwork
         return SerializerUtil.Serialize(packet);
     }
 
+    /*
+    public int totalBytes = 0;
+    public Stopwatch watch = new();
+    */
+
     // Send packet to specific client.
     public void SendToClient(byte[] data, IServerPlayer player)
     {
         IPEndPoint clientEndPoint = connectedClients.Get(player);
         if (clientEndPoint == null) return;
+
+        /*
+        totalBytes += data.Length; // Test.
+        Console.WriteLine($"{totalBytes / 1024f / (watch.ElapsedMilliseconds / 1000)} kb/second");
+        if (watch.ElapsedMilliseconds > 20000)
+        {
+            watch.Restart();
+            totalBytes = 0;
+        }
+        */
+
         udpClient.BeginSend(data, data.Length, clientEndPoint, (ar) =>
         {
             udpClient.EndSend(ar);

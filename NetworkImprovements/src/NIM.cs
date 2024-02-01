@@ -85,7 +85,7 @@ public class NIM : ModSystem
                 listenerFound = listener;
             }
         }
-        
+
         listeners.Remove(listenerFound);
 
         clientChannel = capi.Network.RegisterChannel("nim")

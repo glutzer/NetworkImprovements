@@ -352,11 +352,15 @@ public class EntityPassivePhysics : EntityBehavior, IPhysicsTickable
 
         EntityPos pos = entity.SidedPos;
 
-        prevPos.Set(pos);
+        int loops = pos.Motion.Length() > 0.1 ? 10 : 1;
 
-        SetState(pos);
-        ApplyMotion(pos, dt);
-        ApplyTests(pos, dt);
+        for (int i = 0; i < loops; i++)
+        {
+            prevPos.Set(pos);
+            SetState(pos);
+            ApplyMotion(pos, dt / loops);
+            ApplyTests(pos, dt / loops);
+        }
     }
 
     public void AfterPhysicsTick(float dt)

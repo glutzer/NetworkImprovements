@@ -355,11 +355,10 @@ public class EntityPlayerPhysics : EntityControlledPhysics, IRenderer
 
             // This should be in here right?
             AfterPhysicsTick(interval);
-
-            entity.PhysicsUpdateWatcher?.Invoke(interval, prevPos);
         }
 
-        
+        // For camera, lerps from prevPos to current pos by 1 + accum.
+        entity.PhysicsUpdateWatcher?.Invoke(accum, prevPos);
     }
 
     public double RenderOrder => 1;

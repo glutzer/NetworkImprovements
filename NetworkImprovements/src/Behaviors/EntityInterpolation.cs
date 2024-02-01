@@ -6,6 +6,7 @@ using Vintagestory.API.Common;
 using Vintagestory.API.Common.Entities;
 using Vintagestory.API.Datastructures;
 using Vintagestory.API.MathTools;
+using Vintagestory.GameContent;
 
 public struct PositionSnapshot
 {
@@ -41,18 +42,17 @@ public struct PositionSnapshot
 
 public class EntityInterpolation : EntityBehavior, IRenderer
 {
-    public readonly ICoreClientAPI capi;
-    public bool item = false;
+    public ICoreClientAPI capi;
     public EntityAgent agent;
 
     public EntityInterpolation(Entity entity) : base(entity)
     {
         if (entity.World.Side == EnumAppSide.Server) throw new Exception($"Remove server interpolation behavior from {entity.Code.Path}.");
+
         capi = entity.Api as ICoreClientAPI;
 
         capi.Event.RegisterRenderer(this, EnumRenderStage.Before, "interpolateposition");
 
-        item = entity is EntityItem;
         agent = entity as EntityAgent;
     }
 
@@ -82,33 +82,33 @@ public class EntityInterpolation : EntityBehavior, IRenderer
     public float currentBodyYaw;
     public float targetBodyYaw;
 
-    public bool awaitQueue = true;
-
     public void PushQueue(PositionSnapshot snapshot)
     {
         positionQueue.Enqueue(snapshot);
+        queueCount++;
     }
 
     // Interval at what things should be received.
     public float interval = 1 / 15f;
+    public int queueCount;
 
-    public void PopQueue()
+    public void PopQueue(bool clear)
     {
         // Lerping only starts if pL is not null.
-        if (!awaitQueue)
-        {
-            dtAccum -= pN.interval;
+        dtAccum -= pN.interval;
 
-            if (dtAccum < 0) dtAccum = 0;
-        }
-
+        if (dtAccum < 0) dtAccum = 0;
         if (dtAccum > 1) dtAccum = 0;
 
         pL = pN;
         pN = positionQueue.Dequeue();
+        queueCount--;
 
         // Clear flooded queue.
-        while (positionQueue.Count > 2) PopQueue();
+        if (clear)
+        {
+            if (queueCount > 1) PopQueue(true);
+        }
     }
 
     public override void Initialize(EntityProperties properties, JsonObject attributes)
@@ -116,26 +116,29 @@ public class EntityInterpolation : EntityBehavior, IRenderer
         currentYaw = entity.ServerPos.Yaw;
         targetYaw = entity.ServerPos.Yaw;
 
-        lastIdle.Set(entity.ServerPos.X, 1000, entity.ServerPos.Z);
-
         PushQueue(new PositionSnapshot(entity.ServerPos, 0));
 
         targetYaw = entity.ServerPos.Yaw;
         targetPitch = entity.ServerPos.Pitch;
         targetRoll = entity.ServerPos.Roll;
 
-        targetHeadYaw = entity.ServerPos.HeadYaw;
-        targetHeadPitch = entity.ServerPos.HeadPitch;
-
         currentYaw = entity.ServerPos.Yaw;
         currentPitch = entity.ServerPos.Pitch;
         currentRoll = entity.ServerPos.Roll;
 
-        currentHeadYaw = entity.ServerPos.HeadYaw;
-        currentHeadPitch = entity.ServerPos.HeadPitch;
-    }
+        if (agent != null)
+        {
+            targetHeadYaw = entity.ServerPos.HeadYaw;
+            targetHeadPitch = entity.ServerPos.HeadPitch;
+            targetBodyYaw = agent.BodyYawServer;
 
-    public Action OnFirstReceived;
+            currentHeadYaw = entity.ServerPos.HeadYaw;
+            currentHeadPitch = entity.ServerPos.HeadPitch;
+            currentBodyYaw = agent.BodyYawServer;
+        }
+
+        //wait = 3;
+    }
 
     /// <summary>
     /// Called when the client receives a new position.
@@ -143,34 +146,35 @@ public class EntityInterpolation : EntityBehavior, IRenderer
     /// </summary>
     public override void OnReceivedServerPos(bool isTeleport, ref EnumHandling handled)
     {
-        PushQueue(new PositionSnapshot(entity.ServerPos, interval * entity.WatchedAttributes.GetInt("tickDiff")));
+        //PushQueue(new PositionSnapshot(entity.ServerPos, interval * entity.WatchedAttributes.GetInt("tickDiff")));
+        PushQueue(new PositionSnapshot(entity.ServerPos, interval));
 
-        Console.WriteLine($"{entity.WatchedAttributes.GetInt("tickDiff")}");
+        if (isTeleport)
+        {
+            dtAccum = 0;
+            positionQueue.Clear();
+            queueCount = 0;
+
+            PushQueue(new PositionSnapshot(entity.ServerPos, interval * entity.WatchedAttributes.GetInt("tickDiff")));
+            PushQueue(new PositionSnapshot(entity.ServerPos, interval * entity.WatchedAttributes.GetInt("tickDiff")));
+
+            PopQueue(false);
+            PopQueue(false);
+        }
 
         targetYaw = entity.ServerPos.Yaw;
         targetPitch = entity.ServerPos.Pitch;
         targetRoll = entity.ServerPos.Roll;
 
-        targetHeadYaw = entity.ServerPos.HeadYaw;
-        targetHeadPitch = entity.ServerPos.HeadPitch;
-
         if (agent != null)
         {
+            targetHeadYaw = entity.ServerPos.HeadYaw;
+            targetHeadPitch = entity.ServerPos.HeadPitch;
             targetBodyYaw = agent.BodyYawServer;
-        }
-
-        OnFirstReceived?.Invoke();
-
-        if (isTeleport)
-        {
-            lastIdle.Set(pN.x, pN.y, pN.z);
-            dtAccum = 0;
-
-            awaitQueue = true;
         }
     }
 
-    public Vec3d lastIdle = new();
+    public int wait = 0;
 
     // This can be a problem if there's a thousand item entities on the ground?
     // If queue is empty do nothing and return.
@@ -184,45 +188,35 @@ public class EntityInterpolation : EntityBehavior, IRenderer
             return;
         }
 
-        if (awaitQueue)
+        if (queueCount < wait)
         {
-            if (positionQueue.Count > 3)
-            {
-                awaitQueue = false;
-                PopQueue();
-            }
-            else
-            {
-                entity.Pos.SetFrom(lastIdle);
-                return;
-            }
+            Console.WriteLine($"Waiting");
+            return;
         }
 
-        dtAccum += dt;
+        dtAccum += dt * (queueCount * 0.2f + 0.8f);
 
         // If over the interval and there's no queues stop the entity until it can be re-synced.
         while (dtAccum > pN.interval)
         {
-            if (positionQueue.Count > 0)
+            if (queueCount > 0)
             {
-                PopQueue();
+                PopQueue(false);
+                wait = 0;
             }
             else
             {
-                Console.WriteLine($"None left, awaiting.");
-
-                lastIdle.Set(pN.x, pN.y, pN.z);
-                dtAccum = 0;
-
-                awaitQueue = true;
-                return;
+                wait = 1;
+                currentYaw = targetYaw;
+                currentPitch = targetPitch;
+                currentRoll = targetRoll;
+                break;
             }
         }
 
-        if (positionQueue.Count > 2)
+        if (queueCount > 20)
         {
-            Console.WriteLine($"Too many, popping in render. {(1/15f - dtAccum) * 1000} ms remaining.");
-            PopQueue();
+            PopQueue(true);
         }
 
         // If the entity is an agent and mounted on something.
@@ -245,6 +239,7 @@ public class EntityInterpolation : EntityBehavior, IRenderer
         }
 
         float delta = dtAccum / pN.interval;
+        if (wait != 0) delta = 1; // So FPS below 15 can function.
 
         // Only lerp position if not mounted.
         if (!isMounted)
@@ -258,15 +253,11 @@ public class EntityInterpolation : EntityBehavior, IRenderer
         entity.Pos.Pitch = LerpRotation(ref currentPitch, targetPitch, dt);
         entity.Pos.Roll = LerpRotation(ref currentRoll, targetRoll, dt);
 
-        if (!item)
+        if (agent != null)
         {
             entity.Pos.HeadYaw = LerpRotation(ref currentHeadYaw, targetHeadYaw, dt);
             entity.Pos.HeadPitch = LerpRotation(ref currentHeadPitch, targetHeadPitch, dt);
-
-            if (agent != null)
-            {
-                agent.BodyYaw = LerpRotation(ref currentBodyYaw, targetBodyYaw, dt);
-            }
+            agent.BodyYaw = LerpRotation(ref currentBodyYaw, targetBodyYaw, dt);
         }
     }
 

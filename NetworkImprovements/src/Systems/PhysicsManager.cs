@@ -80,12 +80,19 @@ public class PhysicsManager : LoadBalancedTask
         loadedEntities = server.GetField<CachingConcurrentDictionary<long, Entity>>("LoadedEntities");
     }
 
-    int tick = 0;
+    public int tick = 0;
 
     // Update positions on UDP.
     public void UpdatePositions()
     {
         tick++;
+
+        bool forceUpdate = false;
+
+        if (tick % 15 == 0)
+        {
+            forceUpdate = true;
+        }
 
         foreach (ConnectedClient client in server.Clients.Values)
         {
@@ -109,10 +116,11 @@ public class PhysicsManager : LoadBalancedTask
                 {
                     entitiesPositionupdate.Add(entity);
                 }
-                else if (!entity.ServerPos.BasicallySameAs(entity.PreviousServerPos, 0.002) || (entityAgent != null && entityAgent.Controls.Dirty))
+                else if (forceUpdate || !entity.ServerPos.BasicallySameAs(entity.PreviousServerPos, 0.0001) || (entityAgent != null && entityAgent.Controls.Dirty))
                 {
                     entitiesPositionMinimalupdate.Add(entity);
                 }
+                entity.PreviousServerPos.SetFrom(entity.ServerPos);
             }
 
             BulkPositionPacket bulkPositionPacket = new()
