@@ -16,7 +16,7 @@ public class PhysicsManager : LoadBalancedTask
     public Queue<IPhysicsTickable> toRemove = new();
 
     // Interval at which physics are ticked.
-    public float interval = 1 / 30f;
+    public float tickInterval = 1 / 30f;
 
     public ICoreServerAPI sapi;
     public UDPNetwork udpNetwork;
@@ -82,11 +82,15 @@ public class PhysicsManager : LoadBalancedTask
 
     public int tick = 0;
 
+    public List<PositionPacket> positionsToSend = new();
+    public List<MinPositionPacket> minPositionsToSend = new();
+
     // Update positions on UDP.
     public void UpdatePositions()
     {
         tick++;
 
+        // Every second, update stationary entities.
         bool forceUpdate = false;
 
         if (tick % 15 == 0)
@@ -103,9 +107,8 @@ public class PhysicsManager : LoadBalancedTask
 
             foreach (Entity entity in loadedEntities.Values)
             {
+                // Player positions and animations are sent as soon as the server receives them.
                 if (entity is EntityPlayer) continue;
-
-                if (entity == client.Player.Entity) continue;
 
                 bool trackedByClient = client.TrackedEntities.ContainsKey(entity.EntityId);
                 bool noChunk = !client.DidSendChunk(entity.InChunkIndex3d) && entity.EntityId != client.Player.Entity.EntityId;
@@ -120,14 +123,12 @@ public class PhysicsManager : LoadBalancedTask
                 {
                     entitiesPositionMinimalupdate.Add(entity);
                 }
-                entity.PreviousServerPos.SetFrom(entity.ServerPos);
             }
 
-            BulkPositionPacket bulkPositionPacket = new()
-            {
-                packets = new PositionPacket[entitiesPositionupdate.Count],
-                minPackets = new MinPositionPacket[entitiesPositionMinimalupdate.Count]
-            };
+            // Send at most 100 position updates per packet (~5kb).
+            int size = 0;
+            positionsToSend.Clear();
+            minPositionsToSend.Clear();
 
             BulkAnimationPacket bulkAnimationPacket = new()
             {
@@ -137,24 +138,72 @@ public class PhysicsManager : LoadBalancedTask
             int i = 0;
             foreach (Entity entity in entitiesPositionupdate)
             {
-                bulkPositionPacket.packets[i] = new PositionPacket(entity, tick);
+                int entityTick = entity.WatchedAttributes.GetInt("currTick");
 
+                positionsToSend.Add(new PositionPacket(entity, entityTick));
                 bulkAnimationPacket.packets[i++] = new AnimationPacket(entity);
+
+                entity.WatchedAttributes.SetInt("currTick", ++entityTick);
+
+                size++;
+
+                if (size > 100)
+                {
+                    BulkPositionPacket bulkPositionPacket = new()
+                    {
+                        packets = positionsToSend.ToArray(),
+                        minPackets = Array.Empty<MinPositionPacket>()
+                    };
+                    udpNetwork.SendBulkPositionPacket(bulkPositionPacket, client.Player);
+                    positionsToSend.Clear();
+                    size = 0;
+                }
             }
 
-            i = 0;
             foreach (Entity entity in entitiesPositionMinimalupdate)
             {
-                bulkPositionPacket.minPackets[i++] = new MinPositionPacket(entity, tick);
+                int entityTick = entity.WatchedAttributes.GetInt("currTick");
+
+                minPositionsToSend.Add(new MinPositionPacket(entity, entityTick));
+
+                entity.WatchedAttributes.SetInt("currTick", ++entityTick);
+
+                size++;
+
+                if (size > 100)
+                {
+                    BulkPositionPacket bulkPositionPacket = new()
+                    {
+                        packets = positionsToSend.ToArray(),
+                        minPackets = minPositionsToSend.ToArray()
+                    };
+                    udpNetwork.SendBulkPositionPacket(bulkPositionPacket, client.Player);
+
+                    positionsToSend.Clear();
+                    minPositionsToSend.Clear();
+
+                    size = 0;
+                }
+            }
+
+            if (size > 0)
+            {
+                BulkPositionPacket bulkPositionPacket = new()
+                {
+                    packets = positionsToSend.ToArray(),
+                    minPackets = minPositionsToSend.ToArray()
+                };
+                udpNetwork.SendBulkPositionPacket(bulkPositionPacket, client.Player);
             }
 
             system.serverChannel.SendPacket(bulkAnimationPacket, client.Player);
-            udpNetwork.SendBulkPositionPacket(bulkPositionPacket, client.Player);
         }
 
         foreach (Entity entity in loadedEntities.Values)
         {
             if (entity is EntityPlayer) continue;
+
+            entity.PreviousServerPos.SetFrom(entity.ServerPos);
 
             if (entity.AnimManager != null) entity.AnimManager.AnimationsDirty = false;
 
@@ -318,9 +367,9 @@ public class PhysicsManager : LoadBalancedTask
             ServerMain.Logger.Warning("Skipping 1000ms of physics ticks. Overloaded.");
         }
 
-        while (accumulation > interval)
+        while (accumulation > tickInterval)
         {
-            accumulation -= interval;
+            accumulation -= tickInterval;
             DoServerTick();
         }
     }
@@ -350,7 +399,7 @@ public class PhysicsManager : LoadBalancedTask
 
             try
             {
-                tickable.AfterPhysicsTick(interval);
+                tickable.AfterPhysicsTick(tickInterval);
             }
             catch (Exception e)
             {
@@ -365,7 +414,7 @@ public class PhysicsManager : LoadBalancedTask
         {
             if (AsyncHelper.CanProceedOnThisThread(ref tickable.FlagTickDone))
             {
-                tickable.OnPhysicsTick(interval);
+                tickable.OnPhysicsTick(tickInterval);
             }
         }
     }

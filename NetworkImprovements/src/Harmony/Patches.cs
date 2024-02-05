@@ -16,6 +16,7 @@ using Vintagestory.GameContent;
 public class Patches
 {
     // The new position should only be set on the client receiving it. This breaks interpolation otherwise.
+    // For teleporting.
     [HarmonyPatch(typeof(Entity), "OnReceivedServerPacket")]
     public static class ReceivedPacketPostfix
     {
@@ -50,6 +51,7 @@ public class Patches
 
     // Nametags and some positions break if the position is set here. I tried calling renderframe after received server pos in interpolation but it didn't help.
     // ServerPos is handled in interpolation.
+    // Introduce an "interpolatable" field to entity.
     [HarmonyPatch(typeof(Entity), "OnReceivedServerPos")]
     public static class MovedPrefix
     {

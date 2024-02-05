@@ -1,6 +1,4 @@
 ﻿using HarmonyLib;
-using ProperVersion;
-using Vintagestory.API.Client;
 using Vintagestory.API.Common;
 using Vintagestory.API.Common.Entities;
 using Vintagestory.API.Config;
@@ -75,90 +73,4 @@ public class ServerSystemPatches
             return false;
         }
     }
-
-    /*
-    //CLIENT PACKETS NO LONGER SENT
-    // Call this if the version is correct. Does physics and broadcasts the newly received player position.
-    [HarmonyPatch(typeof(ServerSystemEntitySimulation), "HandlePlayerPosition")]
-    public static class HandlePlayerPositionPostfix
-    {
-        [HarmonyPostfix]
-        public static void Postfix(Packet_Client packet, ConnectedClient client, ref ServerMain ___server)
-        {
-            ServerPlayer player = client.Player;
-
-            Packet_PlayerPosition playerPosition = packet.PlayerPosition;
-
-            int version = player.Entity.WatchedAttributes.GetInt("positionVersionNumber");
-
-            if (playerPosition.PositionVersionNumber >= version)
-            {
-                BroadcastNewPlayerPosition(client.Player.Entity, ___server);
-                client.Player.Entity.GetBehavior<EntityPlayerPhysics>().OnReceivedClientPos(packet.PlayerPosition.PositionVersionNumber, 0);
-            }
-        }
-
-        // This should just broadcast a new entity moved packet. I just copied the bulk version from entity simulation since I couldn't find it. New entity attribute update doesn't send player positions. Instead player positions are sent as soon as the server receives them.
-        public static void BroadcastNewPlayerPosition(EntityPlayer entity, ServerMain server)
-        {
-            Packet_EntityMoved packet = new()
-            {
-                EntityId = entity.EntityId,
-                EntityPosition = ServerPackets.getEntityPositionPacket(entity.ServerPos, entity),
-                MotionX = CollectibleNet.SerializeFloatVeryPrecise((float)entity.ServerPos.Motion.X),
-                MotionY = CollectibleNet.SerializeFloatVeryPrecise((float)entity.ServerPos.Motion.Y),
-                MotionZ = CollectibleNet.SerializeFloatVeryPrecise((float)entity.ServerPos.Motion.Z),
-                Controls = entity?.Controls.ToInt() ?? 0,
-                IsTeleport = entity.IsTeleport ? 1 : 0
-            };
-
-            if (entity.AnimManager == null)
-            {
-                return;
-            }
-
-            Dictionary<string, AnimationMetaData> activeAnimationsByAnimCode = entity.AnimManager.ActiveAnimationsByAnimCode;
-
-            int[] anims1 = new int[activeAnimationsByAnimCode.Count];
-            int[] anims2 = new int[activeAnimationsByAnimCode.Count];
-
-            int index = 0;
-            foreach (KeyValuePair<string, AnimationMetaData> item in activeAnimationsByAnimCode)
-            {
-                if (!(item.Value.TriggeredBy?.DefaultAnim ?? false))
-                {
-                    anims2[index] = CollectibleNet.SerializeFloatPrecise(item.Value.AnimationSpeed);
-                    anims1[index++] = (int)item.Value.CodeCrc32;
-                }
-            }
-
-            packet.SetActiveAnimations(anims1);
-            packet.SetActiveAnimationSpeeds(anims2);
-
-            // Might need to initialize all arrays to test this.
-            Packet_EntityMoved[] bulkPacket1 = new Packet_EntityMoved[1];
-            bulkPacket1[0] = packet;
-            Packet_BulkEntityAttributes bulkPacket2 = new();
-            bulkPacket2.SetPosUpdates(bulkPacket1);
-            Packet_Server packetServer = new()
-            {
-                Id = 60,
-                BulkEntityAttributes = bulkPacket2
-            };
-
-            foreach (ConnectedClient client in server.Clients.Values)
-            {
-                if (client.State != EnumClientState.Connected && client.State != EnumClientState.Playing) continue;
-
-                // Don't send updates to self.
-                if (entity == client.Entityplayer) continue;
-
-                // Don't send untracked players.
-                if (!client.TrackedEntities.ContainsKey(entity.EntityId)) continue;
-
-                server.SendPacket(client.Id, packetServer);
-            }
-        }
-    }
-    */
 }

@@ -25,9 +25,9 @@ public class PModuleKnockback : PModule
         int knockbackState = entity.Attributes.GetInt("dmgkb");
         if (knockbackState == 1)
         {
-            double kbX = entity.WatchedAttributes.GetDouble("kbdirX") * 1.5;
-            double kbY = entity.WatchedAttributes.GetDouble("kbdirY") * 1.5;
-            double kbZ = entity.WatchedAttributes.GetDouble("kbdirZ") * 1.5;
+            double kbX = entity.WatchedAttributes.GetDouble("kbdirX");
+            double kbY = entity.WatchedAttributes.GetDouble("kbdirY");
+            double kbZ = entity.WatchedAttributes.GetDouble("kbdirZ");
 
             pos.Motion.X += kbX;
             pos.Motion.Y += kbY;

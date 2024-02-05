@@ -1,8 +1,7 @@
 ﻿using HarmonyLib;
 using System;
 using System.Collections.Generic;
-using System.Net.Sockets;
-using System.Threading;
+using System.Net;
 using Vintagestory.API.Client;
 using Vintagestory.API.Common;
 using Vintagestory.API.Common.Entities;
@@ -118,12 +117,18 @@ public class NIM : ModSystem
             .RegisterMessageType<NotificationPacket>()
             .SetMessageHandler<NotificationPacket>(ServerNotified);
 
-        sapi.Event.PlayerLeave += Event_PlayerLeave;
+        sapi.Event.PlayerDisconnect += Event_PlayerDisconnect;
     }
 
-    private void Event_PlayerLeave(IServerPlayer byPlayer)
+    private void Event_PlayerDisconnect(IServerPlayer byPlayer)
     {
-        udpNetwork.endPoints.Remove(udpNetwork.connectedClients.Get(byPlayer));
+        IPEndPoint endPoint = udpNetwork.connectedClients.Get(byPlayer);
+
+        if (endPoint != null)
+        {
+            udpNetwork.endPoints.Remove(endPoint);
+        }
+
         udpNetwork.connectingClients.Remove(byPlayer.Entity.EntityId);
         udpNetwork.connectedClients.Remove(byPlayer);
     }

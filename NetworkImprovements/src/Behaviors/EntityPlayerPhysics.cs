@@ -6,7 +6,6 @@ using Vintagestory.API.Config;
 using Vintagestory.API.Datastructures;
 using Vintagestory.API.MathTools;
 using Vintagestory.API.Server;
-using Vintagestory.Client;
 using Vintagestory.Client.NoObf;
 using Vintagestory.Server;
 
@@ -81,8 +80,6 @@ public class EntityPlayerPhysics : EntityControlledPhysics, IRenderer
         physicsModules.Add(new PModuleKnockback());
     }
 
-    public float updateInterval = 1 / 15f;
-
     public void OnReceivedClientPos(int version, int tickDiff)
     {
         if (!remote) return;
@@ -107,8 +104,6 @@ public class EntityPlayerPhysics : EntityControlledPhysics, IRenderer
     {
         if (!remote) return;
 
-        //entity.Pos.SetFrom(entity.ServerPos);
-
         HandleRemote(updateInterval * entity.WatchedAttributes.GetInt("tickDiff"), isTeleport);
     }
 
@@ -118,14 +113,15 @@ public class EntityPlayerPhysics : EntityControlledPhysics, IRenderer
 
         if (player == null) return;
 
-        //if (nPos == null) nPos.Set(entity.SidedPos);
-        if (nPos == null) nPos.Set(entity.ServerPos);
+        if (nPos == null)
+        {
+            nPos = new();
+            nPos.Set(entity.ServerPos); // Should be sided pos?
+        }
 
         float dtFactor = dt * 60;
 
         lPos.SetFrom(nPos);
-
-        //nPos.Set(entity.SidedPos);
         nPos.Set(entity.ServerPos);
 
         // Set the last pos to be the same as the next pos when teleporting.
@@ -138,7 +134,15 @@ public class EntityPlayerPhysics : EntityControlledPhysics, IRenderer
         lPos.Motion.Y = (nPos.Y - lPos.Y) / dtFactor;
         lPos.Motion.Z = (nPos.Z - lPos.Z) / dtFactor;
 
-        // I think this is set when interpolating anyways?
+        if (lPos.Motion.Length() > 100)
+        {
+            lPos.Motion.Set(0, 0, 0);
+        }
+
+        // Set client/server motion.
+        entity.Pos.Motion.Set(lPos.Motion);
+        entity.ServerPos.Motion.Set(lPos.Motion);
+
         EntityAgent agent = entity as EntityAgent;
         if (agent?.MountedOn != null)
         {
@@ -147,31 +151,29 @@ public class EntityPlayerPhysics : EntityControlledPhysics, IRenderer
 
             if (capi != null)
             {
-                entity.SidedPos.SetPos(agent.MountedOn.MountPosition);
+                entity.Pos.SetPos(agent.MountedOn.MountPosition);
             }
 
-            entity.SidedPos.Motion.X = 0;
-            entity.SidedPos.Motion.Y = 0;
-            entity.SidedPos.Motion.Z = 0;
+            entity.ServerPos.Motion.X = 0;
+            entity.ServerPos.Motion.Y = 0;
+            entity.ServerPos.Motion.Z = 0;
             return;
         }
 
-        entity.SidedPos.Motion.Set(lPos.Motion);
+        // Set pos for triggering events.
+        entity.Pos.SetFrom(entity.ServerPos);
 
         prevPos.Set(lPos);
 
         SetState(lPos, dt);
 
-        // Apply gravity then set collision. If collision needs to happen remotely do it here.
-        // Notice there's no fall damage on the server because collision never happens remotely.
-        /*
+        // Apply gravity then set collision.
         double gravityStrength = 1 / 60f * dtFactor + Math.Max(0, -0.015f * lPos.Motion.Y * dtFactor);
         lPos.Motion.Y -= gravityStrength;
         collisionTester.ApplyTerrainCollision(entity, lPos, dtFactor, ref outPos, 0, 0);
         bool falling = lPos.Motion.Y < 0;
         entity.OnGround = entity.CollidedVertically && falling;
         lPos.Motion.Y += gravityStrength;
-        */
 
         lPos.SetPos(nPos);
 
@@ -188,9 +190,6 @@ public class EntityPlayerPhysics : EntityControlledPhysics, IRenderer
         player ??= entityPlayer.Player;
 
         if (player == null) return;
-
-        // Weird NAN bug.
-        //if (double.IsNaN(entity.SidedPos.Y)) return;
 
         EntityPos pos = entity.SidedPos;
         EntityControls controls = ((EntityAgent)entity).Controls;

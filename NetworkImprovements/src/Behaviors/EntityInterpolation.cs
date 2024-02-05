@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Runtime.CompilerServices;
+using System.Text;
 using Vintagestory.API.Client;
 using Vintagestory.API.Common;
 using Vintagestory.API.Common.Entities;
@@ -136,8 +137,6 @@ public class EntityInterpolation : EntityBehavior, IRenderer
             currentHeadPitch = entity.ServerPos.HeadPitch;
             currentBodyYaw = agent.BodyYawServer;
         }
-
-        //wait = 3;
     }
 
     /// <summary>
@@ -147,7 +146,7 @@ public class EntityInterpolation : EntityBehavior, IRenderer
     public override void OnReceivedServerPos(bool isTeleport, ref EnumHandling handled)
     {
         //PushQueue(new PositionSnapshot(entity.ServerPos, interval * entity.WatchedAttributes.GetInt("tickDiff")));
-        PushQueue(new PositionSnapshot(entity.ServerPos, interval));
+        PushQueue(new PositionSnapshot(entity.ServerPos, interval * entity.WatchedAttributes.GetInt("tickDiff")));
 
         if (isTeleport)
         {
@@ -176,6 +175,8 @@ public class EntityInterpolation : EntityBehavior, IRenderer
 
     public int wait = 0;
 
+    public float targetSpeed = 0.8f;
+
     // This can be a problem if there's a thousand item entities on the ground?
     // If queue is empty do nothing and return.
     public void OnRenderFrame(float dt, EnumRenderStage stage)
@@ -188,13 +189,26 @@ public class EntityInterpolation : EntityBehavior, IRenderer
             return;
         }
 
+        entity.Pos.Yaw = LerpRotation(ref currentYaw, targetYaw, dt);
+        entity.Pos.Pitch = LerpRotation(ref currentPitch, targetPitch, dt);
+        entity.Pos.Roll = LerpRotation(ref currentRoll, targetRoll, dt);
+
+        if (agent != null)
+        {
+            entity.Pos.HeadYaw = LerpRotation(ref currentHeadYaw, targetHeadYaw, dt);
+            entity.Pos.HeadPitch = LerpRotation(ref currentHeadPitch, targetHeadPitch, dt);
+            agent.BodyYaw = LerpRotation(ref currentBodyYaw, targetBodyYaw, dt);
+        }
+
         if (queueCount < wait)
         {
-            Console.WriteLine($"Waiting");
             return;
         }
 
-        dtAccum += dt * (queueCount * 0.2f + 0.8f);
+        float speed = queueCount * 0.25f + 0.75f;
+        targetSpeed = GameMath.Lerp(targetSpeed, speed, dt * 4);
+
+        dtAccum += dt * targetSpeed;
 
         // If over the interval and there's no queues stop the entity until it can be re-synced.
         while (dtAccum > pN.interval)
@@ -207,9 +221,6 @@ public class EntityInterpolation : EntityBehavior, IRenderer
             else
             {
                 wait = 1;
-                currentYaw = targetYaw;
-                currentPitch = targetPitch;
-                currentRoll = targetRoll;
                 break;
             }
         }
@@ -248,17 +259,6 @@ public class EntityInterpolation : EntityBehavior, IRenderer
             entity.Pos.Y = GameMath.Lerp(pL.y, pN.y, delta);
             entity.Pos.Z = GameMath.Lerp(pL.z, pN.z, delta);
         }
-
-        entity.Pos.Yaw = LerpRotation(ref currentYaw, targetYaw, dt);
-        entity.Pos.Pitch = LerpRotation(ref currentPitch, targetPitch, dt);
-        entity.Pos.Roll = LerpRotation(ref currentRoll, targetRoll, dt);
-
-        if (agent != null)
-        {
-            entity.Pos.HeadYaw = LerpRotation(ref currentHeadYaw, targetHeadYaw, dt);
-            entity.Pos.HeadPitch = LerpRotation(ref currentHeadPitch, targetHeadPitch, dt);
-            agent.BodyYaw = LerpRotation(ref currentBodyYaw, targetBodyYaw, dt);
-        }
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -266,7 +266,7 @@ public class EntityInterpolation : EntityBehavior, IRenderer
     {
         float pDiff = Math.Abs(GameMath.AngleRadDistance(current, target)) * dt / 0.1f;
         int signY = Math.Sign(pDiff);
-        current += 0.7f * Math.Clamp(GameMath.AngleRadDistance(current, target), -signY * pDiff, signY * pDiff);
+        current += 0.5f * Math.Clamp(GameMath.AngleRadDistance(current, target), -signY * pDiff, signY * pDiff);
         current %= GameMath.TWOPI;
         return current;
     }

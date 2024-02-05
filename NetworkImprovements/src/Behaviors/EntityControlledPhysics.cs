@@ -36,7 +36,7 @@ public class EntityControlledPhysics : EntityBehavior, IPhysicsTickable
 
     // Used for calculating minimal physics and collision to trigger required things without doing a full simulation.
     public EntityPos lPos = new();
-    public Vec3d nPos = new();
+    public Vec3d nPos;
 
     private double prevYMotion;
     private bool onGroundBefore;
@@ -45,7 +45,7 @@ public class EntityControlledPhysics : EntityBehavior, IPhysicsTickable
 
     public EntityControlledPhysics(Entity entity) : base(entity)
     {
-
+        
     }
 
     public virtual void SetModules()
@@ -87,25 +87,66 @@ public class EntityControlledPhysics : EntityBehavior, IPhysicsTickable
         if (entity.Api is ICoreServerAPI) sapi = entity.Api as ICoreServerAPI;
 
         entity.PhysicsUpdateWatcher?.Invoke(0, entity.SidedPos.XYZ);
+
+        // In entity, make this always set it to 1.
+        // Also instead of freezing the pitch in EntityShapeRenderer, make it normal.
+        if (remote)
+        {
+            EnumHandling handling = EnumHandling.Handled;
+            OnReceivedServerPos(true, ref handling);
+
+            entity.Attributes.RegisterModifiedListener("dmgkb", () =>
+            {
+                if (entity.Attributes.GetInt("dmgkb") == 1)
+                {
+                    kbCounter = 2;
+                }
+            });
+        }
     }
 
     public float updateInterval = 1 / 15f;
 
+    // Use server motion.
     public override void OnReceivedServerPos(bool isTeleport, ref EnumHandling handled)
     {
         if (!remote) return;
 
-        if (nPos == null) nPos.Set(entity.SidedPos);
+        if (nPos == null)
+        {
+            nPos = new();
+            nPos.Set(entity.ServerPos);
+        }
 
-        float dt = updateInterval * entity.WatchedAttributes.GetInt("tickDiff");
+        float dt = updateInterval * entity.WatchedAttributes.GetInt("tickDiff", 1);
+
+        if (dt == 0)
+        {
+            return;
+        }
+
         float dtFactor = dt * 60;
 
         lPos.SetFrom(nPos);
-        nPos.Set(entity.SidedPos);
+        nPos.Set(entity.ServerPos);
+
+        if (isTeleport)
+        {
+            lPos.SetFrom(nPos);
+        }
 
         lPos.Motion.X = (nPos.X - lPos.X) / dtFactor;
         lPos.Motion.Y = (nPos.Y - lPos.Y) / dtFactor;
         lPos.Motion.Z = (nPos.Z - lPos.Z) / dtFactor;
+
+        if (lPos.Motion.Length() > 100)
+        {
+            lPos.Motion.Set(0, 0, 0);
+        }
+
+        // Set client motion.
+        entity.Pos.Motion.Set(lPos);
+        entity.ServerPos.Motion.Set(lPos.Motion);
 
         EntityAgent agent = entity as EntityAgent;
         if (agent?.MountedOn != null)
@@ -118,24 +159,46 @@ public class EntityControlledPhysics : EntityBehavior, IPhysicsTickable
                 entity.Pos.SetPos(agent.MountedOn.MountPosition);
             }
 
-            entity.SidedPos.Motion.X = 0;
-            entity.SidedPos.Motion.Y = 0;
-            entity.SidedPos.Motion.Z = 0;
+            entity.ServerPos.Motion.X = 0;
+            entity.ServerPos.Motion.Y = 0;
+            entity.ServerPos.Motion.Z = 0;
             return;
         }
 
-        entity.SidedPos.Motion.Set(lPos.Motion);
+        // Set pos for triggering events.
+        entity.Pos.SetFrom(entity.ServerPos);
 
         prevPos.Set(lPos);
 
         SetState(lPos, dt);
+
+        // Apply gravity then set collision.
+        double gravityStrength = 1 / 60f * dtFactor + Math.Max(0, -0.015f * lPos.Motion.Y * dtFactor);
+        lPos.Motion.Y -= gravityStrength;
+        collisionTester.ApplyTerrainCollision(entity, lPos, dtFactor, ref outPos, 0, 0);
+        bool falling = lPos.Motion.Y < 0;
+        entity.OnGround = entity.CollidedVertically && falling;
+        lPos.Motion.Y += gravityStrength;
 
         lPos.SetPos(nPos);
 
         EntityControls controls = ((EntityAgent)entity).Controls;
 
         ApplyTests(lPos, controls, dt);
+
+        if (kbCounter > 0)
+        {
+            kbCounter -= dt;
+        }
+        else
+        {
+            kbCounter = 0;
+            entity.Attributes.SetInt("dmgkb", 0);
+        }
     }
+
+    public int kbState;
+    public float kbCounter = 0;
 
     public void SetState(EntityPos pos, float dt)
     {
@@ -174,8 +237,6 @@ public class EntityControlledPhysics : EntityBehavior, IPhysicsTickable
     {
         if (entity.State != EnumEntityState.Active) return;
 
-        if (double.IsNaN(entity.SidedPos.Y)) return;
-
         EntityPos pos = entity.SidedPos;
         EntityControls controls = ((EntityAgent)entity).Controls;
 
@@ -194,6 +255,12 @@ public class EntityControlledPhysics : EntityBehavior, IPhysicsTickable
             pos.Motion.Z = 0;
 
             return;
+        }
+
+        // For falling.
+        if (entity.World.Side == EnumAppSide.Server)
+        {
+            entity.Pos.SetFrom(entity.ServerPos);
         }
 
         SetState(pos, dt);
@@ -404,13 +471,17 @@ public class EntityControlledPhysics : EntityBehavior, IPhysicsTickable
         entity.InLava = blockFluid.LiquidCode == "lava";
         entity.Swimming = middleWOIBlock.IsLiquid();
 
-        if (!onGroundBefore && entity.OnGround) entity.OnFallToGround(prevYMotion);
+        if (!onGroundBefore && entity.OnGround)
+        {
+            entity.OnFallToGround(prevYMotion);
+        }
 
         if (!feetInLiquidBefore && entity.FeetInLiquid) entity.OnCollideWithLiquid();
 
         if ((swimmingBefore && !entity.Swimming && !entity.FeetInLiquid) || (feetInLiquidBefore && !entity.FeetInLiquid && !entity.Swimming)) entity.OnExitedLiquid();
 
-        if (!falling || entity.OnGround || controls.IsClimbing) entity.PositionBeforeFalling.Set(outPos);
+        //if (!falling || entity.OnGround || controls.IsClimbing) entity.PositionBeforeFalling.Set(outPos);
+        if (!falling || entity.OnGround || controls.IsClimbing) entity.PositionBeforeFalling.Set(pos);
 
         Cuboidd testedEntityBox = collisionTester.entityBox;
         int xMax = (int)(testedEntityBox.X2 - collisionboxReductionForInsideBlocksCheck);

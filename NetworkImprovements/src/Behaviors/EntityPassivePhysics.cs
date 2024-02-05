@@ -6,6 +6,7 @@ using Vintagestory.API.Config;
 using Vintagestory.API.Datastructures;
 using Vintagestory.API.MathTools;
 using Vintagestory.API.Server;
+using Vintagestory.Client.NoObf;
 
 /// <summary>
 /// Passive physics rewritten to not be render-based but tick based on both the server and client.
@@ -50,7 +51,7 @@ public class EntityPassivePhysics : EntityBehavior, IPhysicsTickable
     /// Will only be used on the thread handling network.
     /// </summary>
     public EntityPos lPos = new();
-    public Vec3d nPos = new();
+    public Vec3d nPos;
 
     /// <summary>
     /// Called when entity spawns.
@@ -89,6 +90,12 @@ public class EntityPassivePhysics : EntityBehavior, IPhysicsTickable
 
         if (entity.Api is ICoreClientAPI capi) this.capi = capi;
         if (entity.Api is ICoreServerAPI sapi) this.sapi = sapi;
+
+        if (remote)
+        {
+            EnumHandling handling = EnumHandling.Handled;
+            OnReceivedServerPos(true, ref handling);
+        }
     }
 
     public float updateInterval = 1 / 15f;
@@ -97,13 +104,22 @@ public class EntityPassivePhysics : EntityBehavior, IPhysicsTickable
     {
         if (!remote) return;
 
-        if (nPos == null) nPos.Set(entity.SidedPos);
+        if (nPos == null)
+        {
+            nPos = new();
+            nPos.Set(entity.ServerPos);
+        }
 
         float dt = updateInterval;
         float dtFactor = dt * 60;
 
         lPos.SetFrom(nPos);
-        nPos.Set(entity.SidedPos);
+        nPos.Set(entity.ServerPos);
+
+        if (isTeleport)
+        {
+            lPos.SetFrom(nPos);
+        }
 
         lPos.Motion.X = (nPos.X - lPos.X) / dtFactor;
         lPos.Motion.Y = (nPos.Y - lPos.Y) / dtFactor;
@@ -114,7 +130,12 @@ public class EntityPassivePhysics : EntityBehavior, IPhysicsTickable
             lPos.Motion.Set(0, 0, 0);
         }
 
-        entity.SidedPos.Motion.Set(lPos.Motion);
+        // Set client motion.
+        entity.Pos.Motion.Set(lPos.Motion);
+        entity.ServerPos.Motion.Set(lPos.Motion);
+
+        // Set pos for triggering events.
+        entity.Pos.SetFrom(entity.ServerPos);
 
         prevPos.Set(lPos);
 

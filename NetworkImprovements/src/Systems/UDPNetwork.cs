@@ -1,9 +1,8 @@
 ﻿using System;
 using System.Collections.Generic;
-using System.Diagnostics;
+using System.Linq;
 using System.Net;
 using System.Net.Sockets;
-using System.Threading;
 using Vintagestory.API.Client;
 using Vintagestory.API.Common;
 using Vintagestory.API.Common.Entities;
@@ -51,7 +50,19 @@ public class UDPNetwork
             else
             {
                 ServerConnectData connectData = client.GetField<ServerConnectData>("Connectdata");
-                serverIp = IPAddress.Parse(connectData.Host);
+
+                IPAddress hostAddress = null;
+                if (connectData.Host == "localhost")
+                {
+                    hostAddress = IPAddress.Loopback;
+                }
+                else
+                {
+                    hostAddress = Dns.GetHostAddresses(connectData.Host).FirstOrDefault();
+                }
+
+                serverIp = hostAddress;
+
                 serverPort = connectData.Port;
             }
 
@@ -108,9 +119,10 @@ public class UDPNetwork
 
             udpClient.BeginReceive(new AsyncCallback(ClientReceiveCallback), null);
         }
-        catch (Exception e)
+        catch
         {
-
+            // Re-listen.
+            udpClient?.BeginReceive(new AsyncCallback(ClientReceiveCallback), null);
         }
         finally
         {
@@ -151,9 +163,10 @@ public class UDPNetwork
 
             udpClient.BeginReceive(new AsyncCallback(ServerReceiveCallback), null);
         }
-        catch (Exception e)
+        catch
         {
-
+            // Re-listen.
+            udpClient?.BeginReceive(new AsyncCallback(ServerReceiveCallback), null);
         }
         finally
         {
@@ -187,13 +200,9 @@ public class UDPNetwork
         }
     }
 
-    // Handle bulk positions on client.
+    // Receive a bulk packet on the client.
     public void HandleBulkPacket(byte[] bytes)
     {
-        Random rand = new();
-
-        //if (rand.NextDouble() > 0.8) return;
-
         BulkPositionPacket bulkPacket = SerializerUtil.Deserialize<BulkPositionPacket>(bytes);
 
         if (bulkPacket.packets != null)
@@ -272,6 +281,7 @@ public class UDPNetwork
         }
     }
 
+    // Receive a player packet on the server.
     public void HandlePlayerPosition(byte[] bytes, IServerPlayer player)
     {
         PositionPacket packet = SerializerUtil.Deserialize<PositionPacket>(bytes);
@@ -353,7 +363,7 @@ public class UDPNetwork
         }
     }
 
-    // Sends a connection packet to the server.
+    // Send a packet to the server to tell it you're connecting.
     public void SendConnectionPacket()
     {
         ConnectionPacket connectionPacket = new(capi.World.Player.Entity.EntityId);
@@ -361,22 +371,27 @@ public class UDPNetwork
         SendToServer(data);
     }
 
-    // Handle connection request through UDP.
+    // Handle player's connection request.
     public void HandleConnectionRequest(byte[] bytes, IPEndPoint endPoint)
     {
         ConnectionPacket packet = SerializerUtil.Deserialize<ConnectionPacket>(bytes);
         IServerPlayer player = connectingClients.Get(packet.entityId);
         if (player == null || connectedClients.ContainsKey(player)) return;
 
-        // Kick illegal connections.
-        if (endPoint.Address != IPAddress.Parse(player.IpAddress))
+        // Kick illegal connections. IP must match.
+        /*
+        if (endPoint.Address.ToString() != player.IpAddress)
         {
             Console.WriteLine($"Invalid connection: {endPoint.Address}, {IPAddress.Parse(player.IpAddress)}, {player.IpAddress}");
+            return;
         }
+        */
 
         connectingClients.Remove(player.Entity.EntityId);
         connectedClients.Add(player, endPoint);
         endPoints.Add(endPoint, player);
+
+        Console.WriteLine($"Player {player.PlayerName} connected on UDP. Sending notification packet...");
 
         NotificationPacket notificationPacket = new()
         {
@@ -384,53 +399,25 @@ public class UDPNetwork
         };
 
         sapi.ModLoader.GetModSystem<NIM>().serverChannel.SendPacket(notificationPacket, player);
-
-        //watch.Start();
     }
 
-    // Serialize a packet into a UDP packet with the id.
+    /// <summary>
+    /// Serialize a packet into a UDPPacket with the id.
+    /// </summary>
+    /// <typeparam name="T"></typeparam>
+    /// <param name="id">Id of the packet you want to send.</param>
+    /// <param name="toSerialize">Packet object.</param>
+    /// <returns></returns>
     public static byte[] MakePacket<T>(byte id, T toSerialize)
     {
         UDPPacket packet = new(id, SerializerUtil.Serialize(toSerialize));
         return SerializerUtil.Serialize(packet);
     }
 
-    /*
-    public int totalBytes = 0;
-    public Stopwatch watch = new();
-    */
-
-    // Send packet to specific client.
-    public void SendToClient(byte[] data, IServerPlayer player)
-    {
-        IPEndPoint clientEndPoint = connectedClients.Get(player);
-        if (clientEndPoint == null) return;
-
-        /*
-        totalBytes += data.Length; // Test.
-        Console.WriteLine($"{totalBytes / 1024f / (watch.ElapsedMilliseconds / 1000)} kb/second");
-        if (watch.ElapsedMilliseconds > 20000)
-        {
-            watch.Restart();
-            totalBytes = 0;
-        }
-        */
-
-        udpClient.BeginSend(data, data.Length, clientEndPoint, (ar) =>
-        {
-            udpClient.EndSend(ar);
-        }, null);
-    }
-
-    // Send packet to server.
-    public void SendToServer(byte[] data)
-    {
-        udpClient.BeginSend(data, data.Length, (ar) =>
-        {
-            udpClient.EndSend(ar);
-        }, null);
-    }
-
+    /// <summary>
+    /// Send own player packet to the server.
+    /// </summary>
+    /// <param name="tick">Tick number in player physics.</param>
     public void SendPlayerPacket(int tick)
     {
         EntityPlayer player = capi.World.Player.Entity;
@@ -439,13 +426,41 @@ public class UDPNetwork
         SendToServer(MakePacket(1, packet));
     }
 
+    /// <summary>
+    /// Send bulk position packet to a player.
+    /// </summary>
     public void SendBulkPositionPacket(BulkPositionPacket packet, IServerPlayer player)
     {
         SendToClient(MakePacket(1, packet), player);
     }
 
+    public void SendToClient(byte[] data, IServerPlayer player)
+    {
+        IPEndPoint clientEndPoint = connectedClients.Get(player);
+
+        if (clientEndPoint == null)
+        {
+            Console.WriteLine($"Endpoint null for {player.PlayerName}. {connectedClients.Count} connected clients. {endPoints.Keys}");
+            return;
+        }
+
+        udpClient.BeginSend(data, data.Length, clientEndPoint, (ar) =>
+        {
+            udpClient.EndSend(ar);
+        }, null);
+    }
+
+    public void SendToServer(byte[] data)
+    {
+        udpClient.BeginSend(data, data.Length, (ar) =>
+        {
+            udpClient.EndSend(ar);
+        }, null);
+    }
+
     public void Dispose()
     {
         udpClient.Close();
+        udpClient = null;
     }
 }
