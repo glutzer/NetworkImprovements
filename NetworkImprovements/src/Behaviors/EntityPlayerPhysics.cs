@@ -27,6 +27,8 @@ public class EntityPlayerPhysics : EntityControlledPhysics, IRenderer
         
     }
 
+    public Vec3d lastGoodPos = new();
+
     public override void Initialize(EntityProperties properties, JsonObject attributes)
     {
         if (entity.Api is ICoreClientAPI) capi = entity.Api as ICoreClientAPI;
@@ -55,10 +57,11 @@ public class EntityPlayerPhysics : EntityControlledPhysics, IRenderer
         if (!remote)
         {
             capi.Event.RegisterRenderer(this, EnumRenderStage.Before, "playerphysics");
-            SetModules();
             udpNetwork = capi.ModLoader.GetModSystem<NIM>().udpNetwork;
             tick = entity.WatchedAttributes.GetInt("ct");
         }
+
+        SetModules();
 
         JsonObject physics = properties?.Attributes?["physics"];
         for (int i = 0; i < physicsModules.Count; i++)
@@ -128,15 +131,28 @@ public class EntityPlayerPhysics : EntityControlledPhysics, IRenderer
         if (isTeleport)
         {
             lPos.SetFrom(nPos);
+            if (lastValid == null)
+            {
+                lastValid = new();
+                lastValid.SetFrom(lPos);
+            }
+            else if (!reconciling)
+            {
+                lastValid.SetFrom(lPos);
+            }
+            reconciling = false;
         }
 
         lPos.Motion.X = (nPos.X - lPos.X) / dtFactor;
         lPos.Motion.Y = (nPos.Y - lPos.Y) / dtFactor;
         lPos.Motion.Z = (nPos.Z - lPos.Z) / dtFactor;
 
-        if (lPos.Motion.Length() > 100)
+        if (lPos.Motion.Length() > 20)
         {
+            // No teleporting.
             lPos.Motion.Set(0, 0, 0);
+            Reconcile(lPos.XYZ);
+            return;
         }
 
         // Set client/server motion.
@@ -167,6 +183,33 @@ public class EntityPlayerPhysics : EntityControlledPhysics, IRenderer
 
         SetState(lPos, dt);
 
+        // No-clip detection.
+        if (sapi != null)
+        {
+            if (lastValid == null)
+            {
+                lastValid = new();
+                lastValid.SetFrom(lPos);
+            }
+
+            lastValid.Motion.X = (nPos.X - lastValid.X) / dtFactor;
+            lastValid.Motion.Y = (nPos.Y - lastValid.Y) / dtFactor;
+            lastValid.Motion.Z = (nPos.Z - lastValid.Z) / dtFactor;
+
+            collisionTester.ApplyTerrainCollision(entity, lastValid, dtFactor, ref outPos, 0, 0);
+
+            double difference = outPos.DistanceTo(nPos);
+
+            if (difference > 0.2)
+            {
+                Reconcile(lastValid.XYZ);
+            }
+            else
+            {
+                lastValid.SetFrom(outPos);
+            }
+        }
+
         // Apply gravity then set collision.
         double gravityStrength = 1 / 60f * dtFactor + Math.Max(0, -0.015f * lPos.Motion.Y * dtFactor);
         lPos.Motion.Y -= gravityStrength;
@@ -182,8 +225,22 @@ public class EntityPlayerPhysics : EntityControlledPhysics, IRenderer
         ApplyTests(lPos, controls, dt);
     }
 
+    public EntityPos lastValid;
+    public bool reconciling = false;
+
+    public void Reconcile(Vec3d pos)
+    {
+        reconciling = true;
+        entity.TeleportToDouble(pos.X, pos.Y, pos.Z);
+    }
+
     // Main client physics tick called every frame.
     public override void OnPhysicsTick(float dt)
+    {
+        SimPhysics(dt, entity.SidedPos);
+    }
+
+    public void SimPhysics(float dt, EntityPos pos)
     {
         if (entity.State != EnumEntityState.Active) return;
 
@@ -191,7 +248,6 @@ public class EntityPlayerPhysics : EntityControlledPhysics, IRenderer
 
         if (player == null) return;
 
-        EntityPos pos = entity.SidedPos;
         EntityControls controls = ((EntityAgent)entity).Controls;
 
         // Set previous pos to be used for camera callback.
@@ -331,7 +387,7 @@ public class EntityPlayerPhysics : EntityControlledPhysics, IRenderer
 
         accum += dt;
 
-        if (accum > 5000)
+        if (accum > 0.5)
         {
             accum = 0;
         }

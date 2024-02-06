@@ -6,7 +6,6 @@ using Vintagestory.API.Config;
 using Vintagestory.API.Datastructures;
 using Vintagestory.API.MathTools;
 using Vintagestory.API.Server;
-using Vintagestory.Client.NoObf;
 
 /// <summary>
 /// Passive physics rewritten to not be render-based but tick based on both the server and client.
@@ -224,15 +223,15 @@ public class EntityPassivePhysics : EntityBehavior, IPhysicsTickable
 
             if (entity.Swimming)
             {
-                //Above 0 => floats
-                //Below 0 => sinks
+                // Above 0 => floats.
+                // Below 0 => sinks.
                 float boyancy = GameMath.Clamp(1 - entity.MaterialDensity / insideFluid.MaterialDensity, -1, 1);
 
                 Block aboveFluid = entity.World.BlockAccessor.GetBlock((int)pos.X, (int)(pos.Y + 1), (int)pos.Z, BlockLayersAccess.Fluid);
                 float waterY = (int)pos.Y + insideFluid.LiquidLevel / 8f + (aboveFluid.IsLiquid() ? 9 / 8f : 0);
 
-                //0 => at swim line
-                //1 => completely submerged
+                // 0 => at swim line.
+                // 1 => completely submerged.
                 float submergedLevel = waterY - (float)pos.Y;
                 float swimLineSubmergedness = GameMath.Clamp(submergedLevel - (entity.SelectionBox.Y2 - (float)entity.SwimmingOffsetY), 0, 1);
 
@@ -299,8 +298,8 @@ public class EntityPassivePhysics : EntityBehavior, IPhysicsTickable
             float waterY = (int)pos.Y + fluid.LiquidLevel / 8f + (aboveBlockFluid.IsLiquid() ? 9 / 8f : 0);
             float submergedLevel = waterY - (float)pos.Y;
 
-            //0 => at swim line
-            //1 => completely submerged
+            // 0 => at swim line.
+            // 1 => completely submerged.
             float swimlineSubmergedness = submergedLevel - (entity.SelectionBox.Y2 - (float)entity.SwimmingOffsetY);
 
             entity.Swimming = swimlineSubmergedness > 0;

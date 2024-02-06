@@ -1,6 +1,9 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Diagnostics;
+using System.Linq;
 using System.Threading;
+using System.Threading.Tasks;
 using Vintagestory.API.Common;
 using Vintagestory.API.Common.Entities;
 using Vintagestory.API.Datastructures;
@@ -59,8 +62,8 @@ public class PhysicsManager : LoadBalancedTask
     private List<Entity> entitiesNowInRange;
     private List<Entity> entitiesFullUpdate;
     private List<Entity> entitiesPartialUpdate;
-    private List<Entity> entitiesPositionupdate;
-    private List<Entity> entitiesPositionMinimalupdate;
+    private List<Entity> entitiesPositionUpdate;
+    private List<Entity> entitiesPositionMinimalUpdate;
     private List<Entity> entitiesFullDebugUpdate;
     private List<Entity> entitiesPartialDebugUpdate;
 
@@ -72,8 +75,8 @@ public class PhysicsManager : LoadBalancedTask
         entitiesNowInRange = es.GetField<List<Entity>>("entitiesNowInRange");
         entitiesFullUpdate = es.GetField<List<Entity>>("entitiesFullUpdate");
         entitiesPartialUpdate = es.GetField<List<Entity>>("entitiesPartialUpdate");
-        entitiesPositionupdate = es.GetField<List<Entity>>("entitiesPositionupdate");
-        entitiesPositionMinimalupdate = es.GetField<List<Entity>>("entitiesPositionMinimalupdate");
+        entitiesPositionUpdate = es.GetField<List<Entity>>("entitiesPositionupdate");
+        entitiesPositionMinimalUpdate = es.GetField<List<Entity>>("entitiesPositionMinimalupdate");
         entitiesFullDebugUpdate = es.GetField<List<Entity>>("entitiesFullDebugUpdate");
         entitiesPartialDebugUpdate = es.GetField<List<Entity>>("entitiesPartialDebugUpdate");
 
@@ -98,12 +101,15 @@ public class PhysicsManager : LoadBalancedTask
             forceUpdate = true;
         }
 
+        Stopwatch sw = new();
+        sw.Start();
+
         foreach (ConnectedClient client in server.Clients.Values)
         {
             if (client.State != EnumClientState.Connected && client.State != EnumClientState.Playing) continue;
 
-            entitiesPositionupdate.Clear();
-            entitiesPositionMinimalupdate.Clear();
+            entitiesPositionUpdate.Clear();
+            entitiesPositionMinimalUpdate.Clear();
 
             foreach (Entity entity in loadedEntities.Values)
             {
@@ -117,11 +123,11 @@ public class PhysicsManager : LoadBalancedTask
                 EntityAgent entityAgent = entity as EntityAgent;
                 if ((entity.AnimManager != null && entity.AnimManager.AnimationsDirty) || entity.IsTeleport)
                 {
-                    entitiesPositionupdate.Add(entity);
+                    entitiesPositionUpdate.Add(entity);
                 }
                 else if (forceUpdate || !entity.ServerPos.BasicallySameAs(entity.PreviousServerPos, 0.0001) || (entityAgent != null && entityAgent.Controls.Dirty))
                 {
-                    entitiesPositionMinimalupdate.Add(entity);
+                    entitiesPositionMinimalUpdate.Add(entity);
                 }
             }
 
@@ -132,11 +138,11 @@ public class PhysicsManager : LoadBalancedTask
 
             BulkAnimationPacket bulkAnimationPacket = new()
             {
-                packets = new AnimationPacket[entitiesPositionupdate.Count]
+                packets = new AnimationPacket[entitiesPositionUpdate.Count]
             };
 
             int i = 0;
-            foreach (Entity entity in entitiesPositionupdate)
+            foreach (Entity entity in entitiesPositionUpdate)
             {
                 int entityTick = entity.WatchedAttributes.GetInt("currTick");
 
@@ -160,7 +166,7 @@ public class PhysicsManager : LoadBalancedTask
                 }
             }
 
-            foreach (Entity entity in entitiesPositionMinimalupdate)
+            foreach (Entity entity in entitiesPositionMinimalUpdate)
             {
                 int entityTick = entity.WatchedAttributes.GetInt("currTick");
 
@@ -198,7 +204,7 @@ public class PhysicsManager : LoadBalancedTask
 
             system.serverChannel.SendPacket(bulkAnimationPacket, client.Player);
         }
-
+        
         foreach (Entity entity in loadedEntities.Values)
         {
             if (entity is EntityPlayer) continue;
@@ -209,6 +215,9 @@ public class PhysicsManager : LoadBalancedTask
 
             entity.IsTeleport = false;
         }
+
+        sw.Stop();
+        Console.WriteLine("PhysicsManager.UpdatePositions took " + sw.ElapsedMilliseconds + "ms");
     }
 
     // Update attributes on TCP.
@@ -223,8 +232,8 @@ public class PhysicsManager : LoadBalancedTask
 
             entitiesNowInRange.Clear();
             entitiesNowOutOfRange.Clear();
-            entitiesPositionupdate.Clear();
-            entitiesPositionMinimalupdate.Clear();
+            entitiesPositionUpdate.Clear();
+            entitiesPositionMinimalUpdate.Clear();
             entitiesFullUpdate.Clear();
             entitiesPartialUpdate.Clear();
             entitiesFullDebugUpdate.Clear();
@@ -311,7 +320,7 @@ public class PhysicsManager : LoadBalancedTask
 
             if (entitiesFullUpdate.Count > 0 || entitiesPartialUpdate.Count > 0)
             {
-                server.SendPacket(client.Id, ServerPackets.GetBulkEntityAttributesPacket(entitiesFullUpdate, entitiesPartialUpdate, entitiesPositionupdate, entitiesPositionMinimalupdate));
+                server.SendPacket(client.Id, ServerPackets.GetBulkEntityAttributesPacket(entitiesFullUpdate, entitiesPartialUpdate, entitiesPositionUpdate, entitiesPositionMinimalUpdate));
             }
 
             if (server.Config.EntityDebugMode && (entitiesFullDebugUpdate.Count > 0 || entitiesPartialDebugUpdate.Count > 0))

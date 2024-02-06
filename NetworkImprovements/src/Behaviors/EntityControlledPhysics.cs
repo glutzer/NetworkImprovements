@@ -7,6 +7,7 @@ using Vintagestory.API.Config;
 using Vintagestory.API.Datastructures;
 using Vintagestory.API.MathTools;
 using Vintagestory.API.Server;
+using Vintagestory.GameContent;
 
 // New version of server-side controlled physics.
 public class EntityControlledPhysics : EntityBehavior, IPhysicsTickable
@@ -473,6 +474,14 @@ public class EntityControlledPhysics : EntityBehavior, IPhysicsTickable
 
         if (!onGroundBefore && entity.OnGround)
         {
+            (entity as EntityAgent).ServerControls.Gliding = false;
+            (entity as EntityAgent).ServerControls.IsFlying = false;
+            (entity as EntityAgent).ServerControls.GlideSpeed = 0;
+
+            controls.Gliding = false;
+            controls.IsFlying = false;
+            controls.GlideSpeed = 0;
+
             entity.OnFallToGround(prevYMotion);
         }
 

@@ -145,7 +145,6 @@ public class EntityInterpolation : EntityBehavior, IRenderer
     /// </summary>
     public override void OnReceivedServerPos(bool isTeleport, ref EnumHandling handled)
     {
-        //PushQueue(new PositionSnapshot(entity.ServerPos, interval * entity.WatchedAttributes.GetInt("tickDiff")));
         PushQueue(new PositionSnapshot(entity.ServerPos, interval * entity.WatchedAttributes.GetInt("tickDiff")));
 
         if (isTeleport)
@@ -175,7 +174,7 @@ public class EntityInterpolation : EntityBehavior, IRenderer
 
     public int wait = 0;
 
-    public float targetSpeed = 0.8f;
+    public float targetSpeed = 0.7f;
 
     // This can be a problem if there's a thousand item entities on the ground?
     // If queue is empty do nothing and return.
@@ -205,7 +204,7 @@ public class EntityInterpolation : EntityBehavior, IRenderer
             return;
         }
 
-        float speed = queueCount * 0.25f + 0.75f;
+        float speed = queueCount * 0.2f + 0.7f;
         targetSpeed = GameMath.Lerp(targetSpeed, speed, dt * 4);
 
         dtAccum += dt * targetSpeed;
