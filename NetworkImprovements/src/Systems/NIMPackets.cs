@@ -156,13 +156,15 @@ public class PositionPacket
         entityId = entity.EntityId;
         EntityPos pos = entity.SidedPos;
 
-        x = pos.X;
-        y = pos.Y;
-        z = pos.Z;
+        EntityPos pPos = entity.PreviousServerPos;
 
-        yaw = pos.Yaw;
-        pitch = pos.Pitch;
-        roll = pos.Roll;
+        if (pos.X != pPos.X) x = pos.X;
+        if (pos.Y != pPos.Y) y = pos.Y;
+        if (pos.Z != pPos.Z) z = pos.Z;
+
+        if (pos.Yaw != pPos.Yaw) yaw = pos.Yaw;
+        if (pos.Pitch != pPos.Pitch) pitch = pos.Pitch;
+        if (pos.Roll != pPos.Roll) roll = pos.Roll;
 
         motionX = (float)pos.Motion.X;
         motionY = (float)pos.Motion.Y;
@@ -172,8 +174,8 @@ public class PositionPacket
 
         if (entity is EntityAgent agent)
         {
-            headYaw = pos.HeadYaw;
-            headPitch = pos.HeadPitch;
+            if (pos.HeadYaw != pPos.HeadYaw) headYaw = pos.HeadYaw;
+            if (pos.HeadPitch != pPos.HeadPitch) headPitch = pos.HeadPitch;
             bodyYaw = agent.BodyYawServer;
 
             controls = agent.Controls.ToInt();
@@ -214,18 +216,20 @@ public class MinPositionPacket
 
         EntityPos pos = entity.SidedPos;
 
-        x = pos.X;
-        y = pos.Y;
-        z = pos.Z;
+        EntityPos pPos = entity.PreviousServerPos;
 
-        yaw = pos.Yaw;
-        pitch = pos.Pitch;
-        roll = pos.Roll;
+        if (pos.X != pPos.X) x = pos.X;
+        if (pos.Y != pPos.Y) y = pos.Y;
+        if (pos.Z != pPos.Z) z = pos.Z;
+
+        if (pos.Yaw != pPos.Yaw) yaw = pos.Yaw;
+        if (pos.Pitch != pPos.Pitch) pitch = pos.Pitch;
+        if (pos.Roll != pPos.Roll) roll = pos.Roll;
 
         if (entity is EntityAgent agent)
         {
-            headYaw = pos.HeadYaw;
-            headPitch = pos.HeadPitch;
+            if (pos.HeadYaw != pPos.HeadYaw) headYaw = pos.HeadYaw;
+            if (pos.HeadPitch != pPos.HeadPitch) headPitch = pos.HeadPitch;
             bodyYaw = agent.BodyYawServer;
 
             controls = agent.Controls.ToInt();

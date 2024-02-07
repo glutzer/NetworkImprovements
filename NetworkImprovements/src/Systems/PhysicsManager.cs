@@ -149,8 +149,6 @@ public class PhysicsManager : LoadBalancedTask
                 positionsToSend.Add(new PositionPacket(entity, entityTick));
                 bulkAnimationPacket.packets[i++] = new AnimationPacket(entity);
 
-                entity.WatchedAttributes.SetInt("currTick", ++entityTick);
-
                 size++;
 
                 if (size > 100)
@@ -171,8 +169,6 @@ public class PhysicsManager : LoadBalancedTask
                 int entityTick = entity.WatchedAttributes.GetInt("currTick");
 
                 minPositionsToSend.Add(new MinPositionPacket(entity, entityTick));
-
-                entity.WatchedAttributes.SetInt("currTick", ++entityTick);
 
                 size++;
 
@@ -214,6 +210,8 @@ public class PhysicsManager : LoadBalancedTask
             if (entity.AnimManager != null) entity.AnimManager.AnimationsDirty = false;
 
             entity.IsTeleport = false;
+
+            entity.WatchedAttributes.SetInt("currTick", entity.WatchedAttributes.GetInt("currTick") + 1);
         }
 
         sw.Stop();

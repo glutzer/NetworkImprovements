@@ -202,7 +202,6 @@ public class EntityInterpolation : EntityBehavior, IRenderer
 
         if (queueCount < wait)
         {
-            entity.Pos.Y = 200;
             return;
         }
 
@@ -218,7 +217,6 @@ public class EntityInterpolation : EntityBehavior, IRenderer
             }
             else
             {
-                entity.Pos.Y = 200;
                 wait = 1;
                 break;
             }

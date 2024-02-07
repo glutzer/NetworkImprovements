@@ -225,19 +225,21 @@ public class UDPNetwork
                 entity.WatchedAttributes.SetInt("tickDiff", packet.tick - lastTick);
                 entity.WatchedAttributes.SetInt("lastTick", packet.tick);
 
-                pos.X = packet.x;
-                pos.Y = packet.y;
-                pos.Z = packet.z;
+                if (packet.x != 0) pos.X = packet.x;
+                if (packet.y != 0) pos.Y = packet.y;
+                if (packet.z != 0) pos.Z = packet.z;
 
-                pos.Yaw = packet.yaw;
-                pos.Pitch = packet.pitch;
-                pos.Roll = packet.roll;
+                if (packet.yaw != 0) pos.Yaw = packet.yaw;
+                if (packet.pitch != 0) pos.Pitch = packet.pitch;
+                if (packet.roll != 0) pos.Roll = packet.roll;
+
+                pos.Motion.Set(packet.motionX, packet.motionY, packet.motionZ);
 
                 if (entity is EntityAgent agent)
                 {
-                    pos.HeadYaw = packet.headYaw;
-                    pos.HeadPitch = packet.headPitch;
-                    agent.BodyYawServer = packet.bodyYaw;
+                    if (packet.headYaw != 0) pos.HeadYaw = packet.headYaw;
+                    if (packet.headPitch != 0) pos.HeadPitch = packet.headPitch;
+                    if (packet.bodyYaw != 0) agent.BodyYawServer = packet.bodyYaw;
 
                     // Sets main controls, then server controls if not the player.
                     agent.Controls.FromInt(packet.controls & 0x210);
@@ -266,19 +268,26 @@ public class UDPNetwork
                 entity.WatchedAttributes.SetInt("tickDiff", packet.tick - lastTick);
                 entity.WatchedAttributes.SetInt("lastTick", packet.tick);
 
-                pos.X = packet.x;
-                pos.Y = packet.y;
-                pos.Z = packet.z;
+                if (packet.x != 0) pos.X = packet.x;
+                if (packet.y != 0) pos.Y = packet.y;
+                if (packet.z != 0) pos.Z = packet.z;
 
-                pos.Yaw = packet.yaw;
-                pos.Pitch = packet.pitch;
-                pos.Roll = packet.roll;
+                if (packet.yaw != 0) pos.Yaw = packet.yaw;
+                if (packet.pitch != 0) pos.Pitch = packet.pitch;
+                if (packet.roll != 0) pos.Roll = packet.roll;
 
                 if (entity is EntityAgent agent)
                 {
-                    pos.HeadYaw = packet.headYaw;
-                    pos.HeadPitch = packet.headPitch;
-                    agent.BodyYawServer = packet.bodyYaw;
+                    if (packet.headYaw != 0) pos.HeadYaw = packet.headYaw;
+                    if (packet.headPitch != 0) pos.HeadPitch = packet.headPitch;
+                    if (packet.bodyYaw != 0) agent.BodyYawServer = packet.bodyYaw;
+
+                    // Sets main controls, then server controls if not the player.
+                    agent.Controls.FromInt(packet.controls & 0x210);
+                    if (agent.EntityId != client.EntityPlayer.EntityId)
+                    {
+                        agent.ServerControls.FromInt(packet.controls);
+                    }
                 }
 
                 entity.OnReceivedServerPos(false);
