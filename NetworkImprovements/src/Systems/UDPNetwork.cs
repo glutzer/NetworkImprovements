@@ -3,7 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Net;
 using System.Net.Sockets;
-using System.Threading;
+using System.Threading.Tasks;
 using Vintagestory.API.Client;
 using Vintagestory.API.Common;
 using Vintagestory.API.Common.Entities;
@@ -40,7 +40,7 @@ public class UDPNetwork
 
             capi = clientApi;
             client = capi.World as ClientMain;
-            client.RegisterGameTickListener(ClientTick, 1);
+            client.RegisterGameTickListener(ClientTick, 15);
 
             GuiScreenRunningGame gui = client.GetField<GuiScreenRunningGame>("ScreenRunningGame");
             if (client.GetField<bool>("IsSingleplayer"))
@@ -87,7 +87,7 @@ public class UDPNetwork
 
             sapi = serverApi;
             server = sapi.World as ServerMain;
-            server.RegisterGameTickListener(ServerTick, 1);
+            server.RegisterGameTickListener(ServerTick, 15);
 
             // Every 2 seconds, validate packets.
             server.RegisterGameTickListener(ValidatePackets, 2000);
@@ -104,9 +104,6 @@ public class UDPNetwork
     public Dictionary<IServerPlayer, IPEndPoint> connectedClients = new();
     public Dictionary<IPEndPoint, IServerPlayer> endPoints = new();
 
-    public IPEndPoint groupEp = new(IPAddress.Any, 0);
-    public byte[] dataBuffer;
-
     // LISTEN FOR MESSAGES AND ENQUEUE.
 
     public void ListenClient()
@@ -116,64 +113,70 @@ public class UDPNetwork
 
     public void ClientReceiveCallback(IAsyncResult ar)
     {
-        dataBuffer = udpClient.EndReceive(ar, ref groupEp);
+        UdpReceiveResult dataBuffer;
 
-        UDPPacket packet = SerializerUtil.Deserialize<UDPPacket>(dataBuffer);
+        Task.Factory.StartNew(async () => {
+            try
+            {
+                while (true)
+                {
+                    dataBuffer = await udpClient.ReceiveAsync();
 
-        lock (messageLock)
-        {
-            if (packet != null) clientPacketQueue.Enqueue(packet);
-        }
+                    UDPPacket packet = SerializerUtil.Deserialize<UDPPacket>(dataBuffer.Buffer);
 
-        if (!disposed)
-        {
-            udpClient.BeginReceive(new AsyncCallback(ClientReceiveCallback), null);
-        }
-        else
-        {
-            udpClient.Close();
-            udpClient = null;
-        }
+                    if (packet != null)
+                    {
+                        lock (messageLock)
+                        {
+                            clientPacketQueue.Enqueue(packet);
+                        }
+                    }
+                }
+            }
+            catch
+            {
+
+            }
+        });
     }
 
     public void ListenServer()
     {
-        udpClient.BeginReceive(new AsyncCallback(ServerReceiveCallback), null);
-    }
+        UdpReceiveResult dataBuffer;
 
-    public void ServerReceiveCallback(IAsyncResult ar)
-    {
-        dataBuffer = udpClient.EndReceive(ar, ref groupEp);
-
-        UDPPacket packet = SerializerUtil.Deserialize<UDPPacket>(dataBuffer);
-
-        if (packet?.id == 0)
-        {
-            HandleConnectionRequest(packet.data, new IPEndPoint(groupEp.Address, groupEp.Port));
-        }
-        else
-        {
-            IServerPlayer sp = endPoints.Get(groupEp); // Race condition?
-            if (sp != null && packet != null)
+        Task.Factory.StartNew(async () => {
+            try
             {
-                packet.player = sp;
-
-                lock (messageLock)
+                while (true)
                 {
-                    serverPacketQueue.Enqueue(packet);
+                    dataBuffer = await udpClient.ReceiveAsync();
+
+                    UDPPacket packet = SerializerUtil.Deserialize<UDPPacket>(dataBuffer.Buffer);
+
+                    if (packet?.id == 0)
+                    {
+                        HandleConnectionRequest(packet.data, new IPEndPoint(dataBuffer.RemoteEndPoint.Address.Address, dataBuffer.RemoteEndPoint.Port));
+                    }
+                    else
+                    {
+                        IServerPlayer sp = endPoints.Get(dataBuffer.RemoteEndPoint);
+                        if (sp != null && packet != null)
+                        {
+                            packet.player = sp;
+
+                            lock (messageLock)
+                            {
+                                serverPacketQueue.Enqueue(packet);
+                            }
+                        }
+                    }
                 }
             }
-        }
+            catch
+            {
 
-        if (!disposed)
-        {
-            udpClient.BeginReceive(new AsyncCallback(ServerReceiveCallback), null);
-        }
-        else
-        {
-            udpClient.Close();
-            udpClient = null;
-        }
+            }
+        });
     }
 
     // PROCESS PACKETS EVERY TICK.
@@ -486,14 +489,8 @@ public class UDPNetwork
         }, null);
     }
 
-    public bool disposed = false;
-
     public void Dispose()
     {
-        disposed = true;
-
-        Thread.Sleep(500);
-
         udpClient.Close();
     }
 }

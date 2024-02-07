@@ -7,6 +7,7 @@ using Vintagestory.API.Common;
 using Vintagestory.API.Common.Entities;
 using Vintagestory.API.Datastructures;
 using Vintagestory.API.MathTools;
+using Vintagestory.Client.NoObf;
 using Vintagestory.GameContent;
 
 public struct PositionSnapshot
@@ -201,11 +202,9 @@ public class EntityInterpolation : EntityBehavior, IRenderer
 
         if (queueCount < wait)
         {
+            entity.Pos.Y = 200;
             return;
         }
-
-        float speed = queueCount * 0.2f + 0.7f;
-        targetSpeed = GameMath.Lerp(targetSpeed, speed, dt * 4);
 
         dtAccum += dt * targetSpeed;
 
@@ -219,6 +218,7 @@ public class EntityInterpolation : EntityBehavior, IRenderer
             }
             else
             {
+                entity.Pos.Y = 200;
                 wait = 1;
                 break;
             }
@@ -228,6 +228,9 @@ public class EntityInterpolation : EntityBehavior, IRenderer
         {
             PopQueue(true);
         }
+
+        float speed = queueCount * 0.2f + 0.8f;
+        targetSpeed = GameMath.Lerp(targetSpeed, speed, dt * 4);
 
         // If the entity is an agent and mounted on something.
         bool isMounted = entity is EntityAgent { MountedOn: not null };
@@ -282,7 +285,7 @@ public class EntityInterpolation : EntityBehavior, IRenderer
 
     public void Dispose()
     {
-
+        capi.Event.UnregisterRenderer(this, EnumRenderStage.Before);
     }
 
     public double RenderOrder => 0;

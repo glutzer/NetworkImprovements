@@ -474,6 +474,7 @@ public class EntityControlledPhysics : EntityBehavior, IPhysicsTickable
 
         if (!onGroundBefore && entity.OnGround)
         {
+            /*
             (entity as EntityAgent).ServerControls.Gliding = false;
             (entity as EntityAgent).ServerControls.IsFlying = false;
             (entity as EntityAgent).ServerControls.GlideSpeed = 0;
@@ -481,6 +482,12 @@ public class EntityControlledPhysics : EntityBehavior, IPhysicsTickable
             controls.Gliding = false;
             controls.IsFlying = false;
             controls.GlideSpeed = 0;
+
+            if (controls.Gliding || (entity as EntityAgent).ServerControls.Gliding)
+            {
+                entity.PositionBeforeFalling.Set(pos);
+            }
+            */
 
             entity.OnFallToGround(prevYMotion);
         }
