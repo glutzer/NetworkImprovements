@@ -1,5 +1,5 @@
-﻿using Vintagestory.API.Common.Entities;
-using Vintagestory.API.Common;
+﻿using Vintagestory.API.Common;
+using Vintagestory.API.Common.Entities;
 using Vintagestory.API.Datastructures;
 
 public abstract class PModule

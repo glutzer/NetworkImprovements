@@ -25,7 +25,7 @@ public class PModuleWind : PModule
     {
         // Update wind force every second and apply the motion to the entity.
         accum += dt;
-        if (accum > 1)
+        if (accum > 5)
         {
             accum = 0;
             UpdateWindForce(entity);

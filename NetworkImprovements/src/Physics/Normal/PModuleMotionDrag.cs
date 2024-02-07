@@ -1,8 +1,8 @@
-﻿using Vintagestory.API.Common.Entities;
+﻿using System;
 using Vintagestory.API.Common;
+using Vintagestory.API.Common.Entities;
 using Vintagestory.API.Config;
 using Vintagestory.API.Datastructures;
-using System;
 
 public class PModuleMotionDrag : PModule
 {
@@ -13,8 +13,8 @@ public class PModuleMotionDrag : PModule
     {
         if (config != null)
         {
-            waterDragValue = 1 - (1 - GlobalConstants.WaterDrag) * (float)config["waterDragFactor"].AsDouble(1);
-            airDragValue = 1 - (1 - GlobalConstants.AirDragAlways) * (float)config["airDragFallingFactor"].AsDouble(1);
+            waterDragValue = 1 - ((1 - GlobalConstants.WaterDrag) * (float)config["waterDragFactor"].AsDouble(1));
+            airDragValue = 1 - ((1 - GlobalConstants.AirDragAlways) * (float)config["airDragFallingFactor"].AsDouble(1));
         }
     }
 

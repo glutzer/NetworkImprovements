@@ -1,9 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
-using System.Diagnostics;
-using System.Linq;
 using System.Threading;
-using System.Threading.Tasks;
 using Vintagestory.API.Common;
 using Vintagestory.API.Common.Entities;
 using Vintagestory.API.Datastructures;
@@ -69,6 +66,8 @@ public class PhysicsManager : LoadBalancedTask
 
     private CachingConcurrentDictionary<long, Entity> loadedEntities;
 
+    private List<Entity> entitiesPositionMinimalUpdateLowRes = new();
+
     public void GrabFields()
     {
         entitiesNowOutOfRange = es.GetField<List<KeyValuePair<Entity, EntityDespawnData>>>("entitiesNowOutOfRange");
@@ -88,6 +87,28 @@ public class PhysicsManager : LoadBalancedTask
     public List<PositionPacket> positionsToSend = new();
     public List<MinPositionPacket> minPositionsToSend = new();
 
+    // Entities > 50 distance away (configurable) only send positions 5 times / second.
+    public void PartitionEntities()
+    {
+        foreach (ConnectedClient client in server.Clients.Values)
+        {
+            foreach (long id in client.TrackedEntities.Keys)
+            {
+                Entity entity = sapi.World.GetEntityById(id);
+
+                if (entity is EntityPlayer || entity == null) continue;
+
+                if (entity.ServerPos.DistanceTo(client.Entityplayer.ServerPos) > 50)
+                {
+                    client.TrackedEntities[id] = false;
+                    continue;
+                }
+
+                client.TrackedEntities[id] = true;
+            }
+        }
+    }
+
     // Update positions on UDP.
     public void UpdatePositions()
     {
@@ -95,14 +116,22 @@ public class PhysicsManager : LoadBalancedTask
 
         // Every second, update stationary entities.
         bool forceUpdate = false;
+        bool lowResUpdate = false;
+
+        if (tick % 45 == 0)
+        {
+            PartitionEntities();
+        }
 
         if (tick % 15 == 0)
         {
             forceUpdate = true;
         }
 
-        Stopwatch sw = new();
-        sw.Start();
+        if (tick % 5 == 0)
+        {
+            lowResUpdate = true;
+        }
 
         foreach (ConnectedClient client in server.Clients.Values)
         {
@@ -110,15 +139,13 @@ public class PhysicsManager : LoadBalancedTask
 
             entitiesPositionUpdate.Clear();
             entitiesPositionMinimalUpdate.Clear();
+            entitiesPositionMinimalUpdateLowRes.Clear();
 
-            foreach (Entity entity in loadedEntities.Values)
+            foreach (long id in client.TrackedEntities.Keys)
             {
-                // Player positions and animations are sent as soon as the server receives them.
-                if (entity is EntityPlayer) continue;
+                Entity entity = sapi.World.GetEntityById(id);
 
-                bool trackedByClient = client.TrackedEntities.ContainsKey(entity.EntityId);
-                bool noChunk = !client.DidSendChunk(entity.InChunkIndex3d) && entity.EntityId != client.Player.Entity.EntityId;
-                if (noChunk && !trackedByClient) continue;
+                if (entity is EntityPlayer || entity == null) continue;
 
                 EntityAgent entityAgent = entity as EntityAgent;
                 if ((entity.AnimManager != null && entity.AnimManager.AnimationsDirty) || entity.IsTeleport)
@@ -127,7 +154,18 @@ public class PhysicsManager : LoadBalancedTask
                 }
                 else if (forceUpdate || !entity.ServerPos.BasicallySameAs(entity.PreviousServerPos, 0.0001) || (entityAgent != null && entityAgent.Controls.Dirty))
                 {
-                    entitiesPositionMinimalUpdate.Add(entity);
+                    if (client.TrackedEntities[id])
+                    {
+                        entitiesPositionMinimalUpdate.Add(entity);
+                        continue;
+                    }
+                    else if (lowResUpdate)
+                    {
+                        // Always send y to avoid floating entities.
+                        // Only when an entity is in low-res range and in low-res tick.
+                        entity.PreviousServerPos.Y = 0;
+                        entitiesPositionMinimalUpdateLowRes.Add(entity);
+                    }
                 }
             }
 
@@ -144,12 +182,10 @@ public class PhysicsManager : LoadBalancedTask
             int i = 0;
             foreach (Entity entity in entitiesPositionUpdate)
             {
-                int entityTick = entity.WatchedAttributes.GetInt("currTick");
-
-                positionsToSend.Add(new PositionPacket(entity, entityTick));
-                bulkAnimationPacket.packets[i++] = new AnimationPacket(entity);
-
+                positionsToSend.Add(new PositionPacket(entity, false));
                 size++;
+
+                bulkAnimationPacket.packets[i++] = new AnimationPacket(entity);
 
                 if (size > 100)
                 {
@@ -166,10 +202,28 @@ public class PhysicsManager : LoadBalancedTask
 
             foreach (Entity entity in entitiesPositionMinimalUpdate)
             {
-                int entityTick = entity.WatchedAttributes.GetInt("currTick");
+                minPositionsToSend.Add(new MinPositionPacket(entity, false));
+                size++;
 
-                minPositionsToSend.Add(new MinPositionPacket(entity, entityTick));
+                if (size > 100)
+                {
+                    BulkPositionPacket bulkPositionPacket = new()
+                    {
+                        packets = positionsToSend.ToArray(),
+                        minPackets = minPositionsToSend.ToArray()
+                    };
+                    udpNetwork.SendBulkPositionPacket(bulkPositionPacket, client.Player);
 
+                    positionsToSend.Clear();
+                    minPositionsToSend.Clear();
+
+                    size = 0;
+                }
+            }
+
+            foreach (Entity entity in entitiesPositionMinimalUpdateLowRes)
+            {
+                minPositionsToSend.Add(new MinPositionPacket(entity, true));
                 size++;
 
                 if (size > 100)
@@ -210,12 +264,7 @@ public class PhysicsManager : LoadBalancedTask
             if (entity.AnimManager != null) entity.AnimManager.AnimationsDirty = false;
 
             entity.IsTeleport = false;
-
-            entity.WatchedAttributes.SetInt("currTick", entity.WatchedAttributes.GetInt("currTick") + 1);
         }
-
-        sw.Stop();
-        Console.WriteLine("PhysicsManager.UpdatePositions took " + sw.ElapsedMilliseconds + "ms");
     }
 
     // Update attributes on TCP.
@@ -275,7 +324,7 @@ public class PhysicsManager : LoadBalancedTask
 
                 if (!trackedByClient && inRange && client.TrackedEntities.Count < MagicNum.TrackedEntitiesPerClient)
                 {
-                    client.TrackedEntities.Add(entity.EntityId, value: true);
+                    client.TrackedEntities.Add(entity.EntityId, value: false);
                     entitiesNowInRange.Add(entity);
                     continue;
                 }
@@ -381,12 +430,12 @@ public class PhysicsManager : LoadBalancedTask
         }
     }
 
-    int currentTick;
+    public int currentTick;
 
     public void DoServerTick()
     {
         currentTick++;
-        if (currentTick % 4 == 0)
+        if (currentTick % 6 == 0)
         {
             UpdateAttributes();
         }

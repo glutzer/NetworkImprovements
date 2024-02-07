@@ -39,6 +39,7 @@ public class EntityPlayerPhysics : EntityControlledPhysics, IRenderer
         if (entity.Api.Side == EnumAppSide.Client)
         {
             clientMain = (ClientMain)capi.World;
+
             // Remote on server. First render frame on client checks if it's a local player.
             remote = false;
         }
@@ -58,7 +59,6 @@ public class EntityPlayerPhysics : EntityControlledPhysics, IRenderer
         {
             capi.Event.RegisterRenderer(this, EnumRenderStage.Before, "playerphysics");
             udpNetwork = capi.ModLoader.GetModSystem<NIM>().udpNetwork;
-            tick = entity.WatchedAttributes.GetInt("ct");
         }
 
         SetModules();
@@ -100,14 +100,14 @@ public class EntityPlayerPhysics : EntityControlledPhysics, IRenderer
             posVersion = version;
         }
 
-        HandleRemote(updateInterval * tickDiff, isTeleport);
+        HandleRemote(updateInterval, isTeleport);
     }
 
     public override void OnReceivedServerPos(bool isTeleport, ref EnumHandling handled)
     {
         if (!remote) return;
 
-        HandleRemote(updateInterval * entity.WatchedAttributes.GetInt("tickDiff"), isTeleport);
+        HandleRemote(updateInterval, isTeleport);
     }
 
     public void HandleRemote(float dt, bool isTeleport)
@@ -131,16 +131,21 @@ public class EntityPlayerPhysics : EntityControlledPhysics, IRenderer
         if (isTeleport)
         {
             lPos.SetFrom(nPos);
-            if (lastValid == null)
+
+            if (sapi != null)
             {
-                lastValid = new();
-                lastValid.SetFrom(lPos);
+                if (lastValid == null)
+                {
+                    lastValid = new();
+                    lastValid.SetFrom(lPos);
+                }
+                else if (!reconciling)
+                {
+                    lastValid.SetFrom(lPos);
+                }
+
+                reconciling = false;
             }
-            else if (!reconciling)
-            {
-                lastValid.SetFrom(lPos);
-            }
-            reconciling = false;
         }
 
         lPos.Motion.X = (nPos.X - lPos.X) / dtFactor;
@@ -149,10 +154,29 @@ public class EntityPlayerPhysics : EntityControlledPhysics, IRenderer
 
         if (lPos.Motion.Length() > 20)
         {
-            // No teleporting.
             lPos.Motion.Set(0, 0, 0);
-            Reconcile(lPos.XYZ);
-            return;
+        }
+
+        // Anti-cheat.
+        if (sapi != null)
+        {
+            if (lastValid == null)
+            {
+                lastValid = new();
+                lastValid.SetFrom(lPos);
+            }
+
+            lastValid.Motion.X = (nPos.X - lastValid.X) / dtFactor;
+            lastValid.Motion.Y = (nPos.Y - lastValid.Y) / dtFactor;
+            lastValid.Motion.Z = (nPos.Z - lastValid.Z) / dtFactor;
+
+            double motionLength = lastValid.Motion.Length();
+
+            if (motionLength > 1.2 && player.WorldData.CurrentGameMode != EnumGameMode.Creative)
+            {
+                Reconcile(lastValid.XYZ);
+                return;
+            }
         }
 
         // Set client/server motion.
@@ -186,16 +210,6 @@ public class EntityPlayerPhysics : EntityControlledPhysics, IRenderer
         // No-clip detection.
         if (sapi != null)
         {
-            if (lastValid == null)
-            {
-                lastValid = new();
-                lastValid.SetFrom(lPos);
-            }
-
-            lastValid.Motion.X = (nPos.X - lastValid.X) / dtFactor;
-            lastValid.Motion.Y = (nPos.Y - lastValid.Y) / dtFactor;
-            lastValid.Motion.Z = (nPos.Z - lastValid.Z) / dtFactor;
-
             collisionTester.ApplyTerrainCollision(entity, lastValid, dtFactor, ref outPos, 0, 0);
 
             double difference = outPos.DistanceTo(nPos);
@@ -211,7 +225,7 @@ public class EntityPlayerPhysics : EntityControlledPhysics, IRenderer
         }
 
         // Apply gravity then set collision.
-        double gravityStrength = 1 / 60f * dtFactor + Math.Max(0, -0.015f * lPos.Motion.Y * dtFactor);
+        double gravityStrength = (1 / 60f * dtFactor) + Math.Max(0, -0.015f * lPos.Motion.Y * dtFactor);
         lPos.Motion.Y -= gravityStrength;
         collisionTester.ApplyTerrainCollision(entity, lPos, dtFactor, ref outPos, 0, 0);
         bool falling = lPos.Motion.Y < 0;
@@ -284,6 +298,10 @@ public class EntityPlayerPhysics : EntityControlledPhysics, IRenderer
                 controls.IsFlying = false;
                 entityPlayer.WalkPitch = 0;
             }
+        }
+        else
+        {
+            controls.GlideSpeed = 0;
         }
     }
 
@@ -367,7 +385,6 @@ public class EntityPlayerPhysics : EntityControlledPhysics, IRenderer
     public float accum = 0;
     public float interval = 1 / 60f;
     public int currentTick;
-    public int tick;
 
     // Do physics every frame on the client.
     public void OnRenderFrame(float dt, EnumRenderStage stage)
@@ -403,8 +420,7 @@ public class EntityPlayerPhysics : EntityControlledPhysics, IRenderer
             {
                 if (clientMain.GetField<bool>("Spawned") && clientMain.EntityPlayer.Alive)
                 {
-                    udpNetwork.SendPlayerPacket(tick);
-                    tick++;
+                    udpNetwork.SendPlayerPacket();
                 }
             }
 

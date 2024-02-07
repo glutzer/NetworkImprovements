@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Net;
 using System.Net.Sockets;
+using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using Vintagestory.API.Client;
 using Vintagestory.API.Common;
@@ -219,11 +220,15 @@ public class UDPNetwork
                 EntityPos pos = entity.ServerPos;
 
                 // Tick info.
+                /*
                 int lastTick = entity.WatchedAttributes.GetInt("lastTick", 0);
                 if (packet.tick < lastTick) continue;
                 if (lastTick == 0) lastTick = packet.tick - 1;
                 entity.WatchedAttributes.SetInt("tickDiff", packet.tick - lastTick);
                 entity.WatchedAttributes.SetInt("lastTick", packet.tick);
+                */
+
+                entity.WatchedAttributes.SetBool("lr", packet.lowRes);
 
                 if (packet.x != 0) pos.X = packet.x;
                 if (packet.y != 0) pos.Y = packet.y;
@@ -262,11 +267,15 @@ public class UDPNetwork
                 EntityPos pos = entity.ServerPos;
 
                 // Tick info.
+                /*
                 int lastTick = entity.WatchedAttributes.GetInt("lastTick", 0);
                 if (packet.tick < lastTick) continue;
                 if (lastTick == 0) lastTick = packet.tick - 1;
                 entity.WatchedAttributes.SetInt("tickDiff", packet.tick - lastTick);
                 entity.WatchedAttributes.SetInt("lastTick", packet.tick);
+                */
+
+                entity.WatchedAttributes.SetBool("lr", packet.lowRes);
 
                 if (packet.x != 0) pos.X = packet.x;
                 if (packet.y != 0) pos.Y = packet.y;
@@ -333,10 +342,12 @@ public class UDPNetwork
         if (packet.positionVersion < version) return;
 
         // Check tick.
+        /*
         int tick = entity.WatchedAttributes.GetInt("ct");
         if (tick > packet.tick) return;
         entity.WatchedAttributes.SetInt("ct", packet.tick);
         int tickDiff = packet.tick - tick;
+        */
 
         serverPlayer.LastReceivedClientPosition = server.ElapsedMilliseconds;
 
@@ -360,7 +371,7 @@ public class UDPNetwork
         entity.Pos.SetAngles(entity.ServerPos);
 
         // Call physics.
-        entity.GetBehavior<EntityPlayerPhysics>().OnReceivedClientPos(version, tickDiff);
+        entity.GetBehavior<EntityPlayerPhysics>().OnReceivedClientPos(version, 1);
 
         // Broadcast position to other players.
         BulkPositionPacket bulkPositionPacket = new()
@@ -368,7 +379,7 @@ public class UDPNetwork
             packets = new PositionPacket[1],
             minPackets = Array.Empty<MinPositionPacket>()
         };
-        bulkPositionPacket.packets[0] = new(entity, tick);
+        bulkPositionPacket.packets[0] = new(entity, false);
 
         byte[] packetBytes = MakePacket(1, bulkPositionPacket);
 
@@ -418,14 +429,17 @@ public class UDPNetwork
         IServerPlayer player = connectingClients.Get(packet.entityId);
         if (player == null || connectedClients.ContainsKey(player)) return;
 
+        // [::ffff:47.219.172.229]:63867 game IP is like this, not raw IP.
+        string inputString = player.IpAddress;
+        string regexPattern = @"\b(?:[0-9]{1,3}\.){3}[0-9]{1,3}\b";
+        string ip = Regex.Match(inputString, regexPattern).Value;
+
         // Kick illegal connections. IP must match.
-        /*
-        if (endPoint.Address.ToString() != player.IpAddress)
+        if (endPoint.Address.ToString() != ip)
         {
-            Console.WriteLine($"Invalid connection: {endPoint.Address}, {IPAddress.Parse(player.IpAddress)}, {player.IpAddress}");
+            Console.WriteLine($"Invalid connection: {endPoint.Address} trying to connect for {ip}");
             return;
         }
-        */
 
         connectingClients.Remove(player.Entity.EntityId);
         connectedClients.Add(player, endPoint);
@@ -458,11 +472,11 @@ public class UDPNetwork
     /// Send own player packet to the server.
     /// </summary>
     /// <param name="tick">Tick number in player physics.</param>
-    public void SendPlayerPacket(int tick)
+    public void SendPlayerPacket()
     {
         EntityPlayer player = capi.World.Player.Entity;
         player.BodyYawServer = player.BodyYaw;
-        PositionPacket packet = new(player, tick);
+        PositionPacket packet = new(player, false);
         SendToServer(MakePacket(1, packet));
     }
 
@@ -480,7 +494,7 @@ public class UDPNetwork
 
         if (clientEndPoint == null)
         {
-            Console.WriteLine($"Endpoint null for {player.PlayerName}.");
+            //Console.WriteLine($"Endpoint null for {player.PlayerName}.");
             return;
         }
 

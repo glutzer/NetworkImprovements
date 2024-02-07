@@ -1,9 +1,9 @@
-﻿using System.Collections.Generic;
+﻿using System;
+using System.Collections.Generic;
 using System.Threading;
-using System;
+using Vintagestory;
 using Vintagestory.API.Common;
 using Vintagestory.Common;
-using Vintagestory;
 
 /// <summary>
 /// Load balancer from internal class.

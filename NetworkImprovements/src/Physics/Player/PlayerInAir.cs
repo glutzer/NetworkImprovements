@@ -45,12 +45,12 @@ public class PlayerInAir : PModuleInAir
             double cosPitch = Math.Cos(pos.Pitch);
             double sinPitch = Math.Sin(pos.Pitch);
 
-            double cosYaw = Math.Cos(Math.PI / 2 - pos.Yaw);
-            double sinYaw = Math.Sin(Math.PI / 2 - pos.Yaw);
+            double cosYaw = Math.Cos((Math.PI / 2) - pos.Yaw);
+            double sinYaw = Math.Sin((Math.PI / 2) - pos.Yaw);
 
             double glideFactor = sinPitch + 0.15;
 
-            controls.GlideSpeed = GameMath.Clamp(controls.GlideSpeed - glideFactor * dt * 0.25f, 0.005f, 0.75f);
+            controls.GlideSpeed = GameMath.Clamp(controls.GlideSpeed - (glideFactor * dt * 0.25f), 0.005f, 0.75f);
 
             double glideSpeed = GameMath.Clamp(controls.GlideSpeed, 0.005f, 0.2f);
              
@@ -59,7 +59,7 @@ public class PlayerInAir : PModuleInAir
                             sinPitch * glideSpeed,
                             cosPitch * cosYaw * glideSpeed);
 
-            pos.Motion.Mul(GameMath.Clamp(1 - pos.Motion.Length() * 0.13f, 0, 1));
+            pos.Motion.Mul(GameMath.Clamp(1 - (pos.Motion.Length() * 0.13f), 0, 1));
         }
         else
         {

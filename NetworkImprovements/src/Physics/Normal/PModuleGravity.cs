@@ -1,6 +1,6 @@
 ﻿using System;
-using Vintagestory.API.Common.Entities;
 using Vintagestory.API.Common;
+using Vintagestory.API.Common.Entities;
 using Vintagestory.API.Config;
 using Vintagestory.API.Datastructures;
 using Vintagestory.API.MathTools;
@@ -25,7 +25,7 @@ public class PModuleGravity : PModule
     {
         return (!controls.IsFlying || controls.Gliding)
             && entity.Properties.Habitat != EnumHabitat.Air
-            && (entity.Properties.Habitat != EnumHabitat.Sea && entity.Properties.Habitat != EnumHabitat.Underwater || !entity.Swimming)
+            && ((entity.Properties.Habitat != EnumHabitat.Sea && entity.Properties.Habitat != EnumHabitat.Underwater) || !entity.Swimming)
             && !controls.IsClimbing;
     }
 
@@ -37,7 +37,7 @@ public class PModuleGravity : PModule
         // If gravity is off for this entity don't apply.
         if (!entity.ApplyGravity) return;
 
-        //Drag motion down while above y -100
+        // Drag motion down while above y -100.
         if (pos.Y > -100)
         {
             double gravity = (gravityPerSecond + Math.Max(0, -0.015f * pos.Motion.Y)) * (entity.FeetInLiquid ? 0.33f : 1f) * dt;

@@ -1,9 +1,9 @@
 ﻿using ProtoBuf;
 using System.Collections.Generic;
-using Vintagestory.API.Common.Entities;
 using Vintagestory.API.Common;
-using Vintagestory.Common;
+using Vintagestory.API.Common.Entities;
 using Vintagestory.API.Server;
+using Vintagestory.Common;
 
 // Send once. Notifies that the entityId of your client will be connected next packet.
 // IP addresses compared to verify.
@@ -117,9 +117,8 @@ public class BulkPositionPacket
 [ProtoContract(ImplicitFields = ImplicitFields.AllFields)]
 public class PositionPacket
 {
-    public int tick;
     public int positionVersion;
-    public long entityId;
+    public int entityId;
 
     public double x;
     public double y;
@@ -142,29 +141,27 @@ public class PositionPacket
 
     public int controls;
 
+    public bool lowRes;
+
     public PositionPacket()
     {
 
     }
 
-    public PositionPacket(Entity entity, int tick)
+    public PositionPacket(Entity entity, bool lowRes)
     {
-        this.tick = tick;
-
         positionVersion = entity.WatchedAttributes.GetInt("positionVersionNumber", 0);
 
-        entityId = entity.EntityId;
+        entityId = (int)entity.EntityId;
         EntityPos pos = entity.SidedPos;
 
-        EntityPos pPos = entity.PreviousServerPos;
+        x = pos.X;
+        y = pos.Y;
+        z = pos.Z;
 
-        if (pos.X != pPos.X) x = pos.X;
-        if (pos.Y != pPos.Y) y = pos.Y;
-        if (pos.Z != pPos.Z) z = pos.Z;
-
-        if (pos.Yaw != pPos.Yaw) yaw = pos.Yaw;
-        if (pos.Pitch != pPos.Pitch) pitch = pos.Pitch;
-        if (pos.Roll != pPos.Roll) roll = pos.Roll;
+        yaw = pos.Yaw;
+        pitch = pos.Pitch;
+        roll = pos.Roll;
 
         motionX = (float)pos.Motion.X;
         motionY = (float)pos.Motion.Y;
@@ -174,20 +171,21 @@ public class PositionPacket
 
         if (entity is EntityAgent agent)
         {
-            if (pos.HeadYaw != pPos.HeadYaw) headYaw = pos.HeadYaw;
-            if (pos.HeadPitch != pPos.HeadPitch) headPitch = pos.HeadPitch;
+            headYaw = pos.HeadYaw;
+            headPitch = pos.HeadPitch;
             bodyYaw = agent.BodyYawServer;
 
             controls = agent.Controls.ToInt();
         }
+
+        this.lowRes = lowRes;
     }
 }
 
 [ProtoContract(ImplicitFields = ImplicitFields.AllFields)]
 public class MinPositionPacket
 {
-    public int tick;
-    public long entityId;
+    public int entityId;
 
     public double x;
     public double y;
@@ -204,15 +202,16 @@ public class MinPositionPacket
 
     public int controls;
 
+    public bool lowRes;
+
     public MinPositionPacket()
     {
 
     }
 
-    public MinPositionPacket(Entity entity, int tick)
+    public MinPositionPacket(Entity entity, bool lowRes)
     {
-        this.tick = tick;
-        entityId = entity.EntityId;
+        entityId = (int)entity.EntityId;
 
         EntityPos pos = entity.SidedPos;
 
@@ -234,5 +233,7 @@ public class MinPositionPacket
 
             controls = agent.Controls.ToInt();
         }
+
+        this.lowRes = lowRes;
     }
 }

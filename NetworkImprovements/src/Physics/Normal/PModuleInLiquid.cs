@@ -39,12 +39,12 @@ public class PModuleInLiquid : PModule
 
     public virtual void HandleSwimming(float dt, Entity entity, EntityPos pos, EntityControls controls)
     {
-        push = Math.Max(1f, push - 0.1f * dt * 60f);
+        push = Math.Max(1f, push - (0.1f * dt * 60f));
 
         Block inBlock = entity.World.BlockAccessor.GetBlock((int)pos.X, (int)pos.Y, (int)pos.Z, BlockLayersAccess.Fluid);
         Block aboveBlock = entity.World.BlockAccessor.GetBlock((int)pos.X, (int)(pos.Y + 1), (int)pos.Z, BlockLayersAccess.Fluid);
         Block twoAboveBlock = entity.World.BlockAccessor.GetBlock((int)pos.X, (int)(pos.Y + 2), (int)pos.Z, BlockLayersAccess.Fluid);
-        float waterY = (int)pos.Y + inBlock.LiquidLevel / 8f + (aboveBlock.IsLiquid() ? 9 / 8f : 0) + (twoAboveBlock.IsLiquid() ? 9 / 8f : 0);
+        float waterY = (int)pos.Y + (inBlock.LiquidLevel / 8f) + (aboveBlock.IsLiquid() ? 9 / 8f : 0) + (twoAboveBlock.IsLiquid() ? 9 / 8f : 0);
         float bottomSubmergedness = waterY - (float)pos.Y;
 
         // 0 => at swim line.
@@ -67,7 +67,7 @@ public class PModuleInLiquid : PModule
         // Fish motion.
         if (entity.Properties.Habitat == EnumHabitat.Underwater && inBlock.IsLiquid() && !aboveBlock.IsLiquid())
         {
-            float maxY = (int)pos.Y + inBlock.LiquidLevel / 8f - entity.CollisionBox.Y2;
+            float maxY = (int)pos.Y + (inBlock.LiquidLevel / 8f) - entity.CollisionBox.Y2;
             if (pos.Y > maxY)
             {
                 yMotion = -GameMath.Clamp(pos.Y - maxY, 0, 0.05);

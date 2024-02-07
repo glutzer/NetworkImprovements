@@ -7,7 +7,6 @@ using Vintagestory.API.Config;
 using Vintagestory.API.Datastructures;
 using Vintagestory.API.MathTools;
 using Vintagestory.API.Server;
-using Vintagestory.GameContent;
 
 // New version of server-side controlled physics.
 public class EntityControlledPhysics : EntityBehavior, IPhysicsTickable
@@ -119,12 +118,10 @@ public class EntityControlledPhysics : EntityBehavior, IPhysicsTickable
             nPos.Set(entity.ServerPos);
         }
 
-        float dt = updateInterval * entity.WatchedAttributes.GetInt("tickDiff", 1);
+        bool lowRes = entity.WatchedAttributes.GetBool("lr");
+        float dt = updateInterval;
 
-        if (dt == 0)
-        {
-            return;
-        }
+        if (lowRes) dt *= 5;
 
         float dtFactor = dt * 60;
 
@@ -140,7 +137,7 @@ public class EntityControlledPhysics : EntityBehavior, IPhysicsTickable
         lPos.Motion.Y = (nPos.Y - lPos.Y) / dtFactor;
         lPos.Motion.Z = (nPos.Z - lPos.Z) / dtFactor;
 
-        if (lPos.Motion.Length() > 100)
+        if (lPos.Motion.Length() > 20)
         {
             lPos.Motion.Set(0, 0, 0);
         }
@@ -174,7 +171,7 @@ public class EntityControlledPhysics : EntityBehavior, IPhysicsTickable
         SetState(lPos, dt);
 
         // Apply gravity then set collision.
-        double gravityStrength = 1 / 60f * dtFactor + Math.Max(0, -0.015f * lPos.Motion.Y * dtFactor);
+        double gravityStrength = (1 / 60f * dtFactor) + Math.Max(0, -0.015f * lPos.Motion.Y * dtFactor);
         lPos.Motion.Y -= gravityStrength;
         collisionTester.ApplyTerrainCollision(entity, lPos, dtFactor, ref outPos, 0, 0);
         bool falling = lPos.Motion.Y < 0;
@@ -187,6 +184,9 @@ public class EntityControlledPhysics : EntityBehavior, IPhysicsTickable
 
         ApplyTests(lPos, controls, dt);
 
+        // Knockback is only removed on the server in the knockback module. It needs to be set on the client so entities don't remain tilted.
+        // Should always set it to 1 when taking damage instead of when it's 0 in the entity class so the timer can always get updated.
+        // Entity should tilt back to normal state if it's being knocked back too.
         if (kbCounter > 0)
         {
             kbCounter -= dt;
@@ -527,7 +527,7 @@ public class EntityControlledPhysics : EntityBehavior, IPhysicsTickable
 
         //Sneak to prevent falling off blocks
         Vec3d testPosition = new();
-        testPosition.Set(pos.X, pos.Y - GlobalConstants.GravityPerSecond * dt, pos.Z);
+        testPosition.Set(pos.X, pos.Y - (GlobalConstants.GravityPerSecond * dt), pos.Z);
 
         //Only apply this if the entity is on the ground in the first place
         if (!collisionTester.IsColliding(entity.World.BlockAccessor, sneakTestCollisionbox, testPosition)) return;
@@ -536,7 +536,7 @@ public class EntityControlledPhysics : EntityBehavior, IPhysicsTickable
         Block belowBlock = entity.World.BlockAccessor.GetBlock(tmpPos);
 
         //Test for X
-        testPosition.Set(outPos.X, outPos.Y - GlobalConstants.GravityPerSecond * dt, pos.Z);
+        testPosition.Set(outPos.X, outPos.Y - (GlobalConstants.GravityPerSecond * dt), pos.Z);
         if (!collisionTester.IsColliding(entity.World.BlockAccessor, sneakTestCollisionbox, testPosition))
         {
             if (belowBlock.IsClimbable(tmpPos))
@@ -550,7 +550,7 @@ public class EntityControlledPhysics : EntityBehavior, IPhysicsTickable
         }
 
         //Test for Z
-        testPosition.Set(pos.X, outPos.Y - GlobalConstants.GravityPerSecond * dt, outPos.Z);
+        testPosition.Set(pos.X, outPos.Y - (GlobalConstants.GravityPerSecond * dt), outPos.Z);
         if (!collisionTester.IsColliding(entity.World.BlockAccessor, sneakTestCollisionbox, testPosition))
         {
             if (belowBlock.IsClimbable(tmpPos))
@@ -677,7 +677,7 @@ public class EntityControlledPhysics : EntityBehavior, IPhysicsTickable
     {
         if (steppableBox == null) return false;
 
-        double heightDiff = steppableBox.Y2 - entityCollisionBox.Y1 + 0.01 * 3f;
+        double heightDiff = steppableBox.Y2 - entityCollisionBox.Y1 + (0.01 * 3f);
         Vec3d stepPos = outPos.OffsetCopy(moveDelta.X, heightDiff, moveDelta.Z);
         bool canStep = !collisionTester.IsColliding(entity.World.BlockAccessor, entity.CollisionBox, stepPos, false);
 
@@ -718,11 +718,11 @@ public class EntityControlledPhysics : EntityBehavior, IPhysicsTickable
                 double elevateFactor = controls.Sprint ? 0.10 : controls.Sneak ? 0.025 : 0.05;
                 if (!steppableBox.IntersectsOrTouches(entityCollisionBox))
                 {
-                    newYPos = Math.Max(newYPos, Math.Min(pos.Y + elevateFactor * dtFac, steppableBox.Y2 - entity.CollisionBox.Y1 + gravityOffset));
+                    newYPos = Math.Max(newYPos, Math.Min(pos.Y + (elevateFactor * dtFac), steppableBox.Y2 - entity.CollisionBox.Y1 + gravityOffset));
                 }
                 else
                 {
-                    newYPos = Math.Max(newYPos, pos.Y + elevateFactor * dtFac);
+                    newYPos = Math.Max(newYPos, pos.Y + (elevateFactor * dtFac));
                 }
                 foundStep = true;
             }
@@ -812,7 +812,7 @@ public class EntityControlledPhysics : EntityBehavior, IPhysicsTickable
         Cuboidd entityBox = entityBoxRel.ToDouble().Translate(pos);
 
         int minX = (int)(entityBoxRel.MinX + pos.X);
-        int minY = (int)(entityBoxRel.MinY + pos.Y - 1); //-1 for the extra high collision box of fences
+        int minY = (int)(entityBoxRel.MinY + pos.Y - 1); // -1 for the extra high collision box of fences.
         int minZ = (int)(entityBoxRel.MinZ + pos.Z);
         int maxX = (int)Math.Ceiling(entityBoxRel.MaxX + pos.X);
         int maxY = (int)Math.Ceiling(entityBoxRel.MaxY + pos.Y);
@@ -880,9 +880,9 @@ public class EntityControlledPhysics : EntityBehavior, IPhysicsTickable
         Mat4f.Translate(ModelMat, ModelMat, 0, entity.CollisionBox.Y2 / 2, 0);
 
         double[] quat = Quaterniond.Create();
-        Quaterniond.RotateX(quat, quat, entity.SidedPos.Pitch + rotX * GameMath.DEG2RAD);
-        Quaterniond.RotateY(quat, quat, entity.SidedPos.Yaw + (rotY + 90) * GameMath.DEG2RAD);
-        Quaterniond.RotateZ(quat, quat, entity.SidedPos.Roll + rotZ * GameMath.DEG2RAD);
+        Quaterniond.RotateX(quat, quat, entity.SidedPos.Pitch + (rotX * GameMath.DEG2RAD));
+        Quaterniond.RotateY(quat, quat, entity.SidedPos.Yaw + ((rotY + 90) * GameMath.DEG2RAD));
+        Quaterniond.RotateZ(quat, quat, entity.SidedPos.Roll + (rotZ * GameMath.DEG2RAD));
 
         float[] qf = new float[quat.Length];
         for (int k = 0; k < quat.Length; k++) qf[k] = (float)quat[k];
@@ -915,8 +915,8 @@ public class EntityControlledPhysics : EntityBehavior, IPhysicsTickable
 
             collisionTester.ApplyTerrainCollision(entity, posMoved, dtFac, ref outPos);
 
-            double reflectX = (outPos.X - entityPos.X) / dtFac - motionX;
-            double reflectZ = (outPos.Z - entityPos.Z) / dtFac - motionZ;
+            double reflectX = ((outPos.X - entityPos.X) / dtFac) - motionX;
+            double reflectZ = ((outPos.Z - entityPos.Z) / dtFac) - motionZ;
 
             entityPos.Motion.X = reflectX;
             entityPos.Motion.Z = reflectZ;

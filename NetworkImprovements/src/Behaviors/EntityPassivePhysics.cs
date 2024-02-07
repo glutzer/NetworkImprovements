@@ -109,7 +109,11 @@ public class EntityPassivePhysics : EntityBehavior, IPhysicsTickable
             nPos.Set(entity.ServerPos);
         }
 
+        bool lowRes = entity.WatchedAttributes.GetBool("lr");
         float dt = updateInterval;
+
+        if (lowRes) dt *= 5;
+
         float dtFactor = dt * 60;
 
         lPos.SetFrom(nPos);
@@ -124,7 +128,7 @@ public class EntityPassivePhysics : EntityBehavior, IPhysicsTickable
         lPos.Motion.Y = (nPos.Y - lPos.Y) / dtFactor;
         lPos.Motion.Z = (nPos.Z - lPos.Z) / dtFactor;
 
-        if (lPos.Motion.Length() > 100)
+        if (lPos.Motion.Length() > 20)
         {
             lPos.Motion.Set(0, 0, 0);
         }

@@ -1,14 +1,11 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Runtime.CompilerServices;
-using System.Text;
 using Vintagestory.API.Client;
 using Vintagestory.API.Common;
 using Vintagestory.API.Common.Entities;
 using Vintagestory.API.Datastructures;
 using Vintagestory.API.MathTools;
-using Vintagestory.Client.NoObf;
-using Vintagestory.GameContent;
 
 public struct PositionSnapshot
 {
@@ -146,7 +143,7 @@ public class EntityInterpolation : EntityBehavior, IRenderer
     /// </summary>
     public override void OnReceivedServerPos(bool isTeleport, ref EnumHandling handled)
     {
-        PushQueue(new PositionSnapshot(entity.ServerPos, interval * entity.WatchedAttributes.GetInt("tickDiff")));
+        PushQueue(new PositionSnapshot(entity.ServerPos, entity.WatchedAttributes.GetBool("lr") ? interval * 5 : interval));
 
         if (isTeleport)
         {
@@ -154,8 +151,8 @@ public class EntityInterpolation : EntityBehavior, IRenderer
             positionQueue.Clear();
             queueCount = 0;
 
-            PushQueue(new PositionSnapshot(entity.ServerPos, interval * entity.WatchedAttributes.GetInt("tickDiff")));
-            PushQueue(new PositionSnapshot(entity.ServerPos, interval * entity.WatchedAttributes.GetInt("tickDiff")));
+            PushQueue(new PositionSnapshot(entity.ServerPos, entity.WatchedAttributes.GetBool("lr") ? interval * 5 : interval));
+            PushQueue(new PositionSnapshot(entity.ServerPos, entity.WatchedAttributes.GetBool("lr") ? interval * 5 : interval));
 
             PopQueue(false);
             PopQueue(false);
@@ -227,7 +224,7 @@ public class EntityInterpolation : EntityBehavior, IRenderer
             PopQueue(true);
         }
 
-        float speed = queueCount * 0.2f + 0.8f;
+        float speed = (queueCount * 0.2f) + 0.8f;
         targetSpeed = GameMath.Lerp(targetSpeed, speed, dt * 4);
 
         // If the entity is an agent and mounted on something.
@@ -283,7 +280,7 @@ public class EntityInterpolation : EntityBehavior, IRenderer
 
     public void Dispose()
     {
-        capi.Event.UnregisterRenderer(this, EnumRenderStage.Before);
+
     }
 
     public double RenderOrder => 0;
