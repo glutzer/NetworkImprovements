@@ -1,48 +1,71 @@
 ﻿using HarmonyLib;
-using ProtoBuf;
+using System;
 using System.Collections.Generic;
+using System.Net;
 using Vintagestory.API.Client;
 using Vintagestory.API.Common;
+using Vintagestory.API.Common.Entities;
 using Vintagestory.API.Server;
 using Vintagestory.API.Util;
 using Vintagestory.Client.NoObf;
 using Vintagestory.Common;
-using Vintagestory.Server;
+using Vintagestory.GameContent;
 
-/// <summary>
-/// Server-authorative entity updates for both client/server.
-/// Initially 20 TPS.
-/// </summary>
 public class NIM : ModSystem
 {
     public PhysicsManager physicsManager;
+    public UDPNetwork udpNetwork;
 
     public ICoreClientAPI capi;
     public ICoreServerAPI sapi;
 
-    public GameTickListener clientUpdateListener;
-    public GameTickListener serverUpdateListener;
-
     public IClientNetworkChannel clientChannel;
     public IServerNetworkChannel serverChannel;
-
-    public int tickrate = 20;
 
     public override double ExecuteOrder() => 0;
 
     public override void Start(ICoreAPI api)
     {
-        api.RegisterEntityBehaviorClass("EntityInterpolation", typeof(EntityInterpolation));
+        // Create the UDP system for sending packets.
+        // Starts relevant thread.
+        udpNetwork = new UDPNetwork(api);
 
-        api.RegisterEntityBehaviorClass("EntityControlledPhysics", typeof(EntityControlledPhysics));
+        // Create a physics manager on both sides. Sends data to clients on UDP network.
+        if (api is ICoreServerAPI serverApi)
+        {
+            physicsManager = new PhysicsManager(serverApi, udpNetwork, this);
+        }
 
-        api.RegisterEntityBehaviorClass("EntityPassivePhysics", typeof(EntityPassivePhysics));
+        RemapClasses(api);
+    }
 
-        api.RegisterEntityBehaviorClass("EntityCollisionChecker", typeof(EntityCollisionChecker));
+    public static void RemapClasses(ICoreAPI api)
+    {
+        // Re-map classes so they don't all need to be raplaced in patches.
+        ClassRegistry registry = (api.ClassRegistry as ClassRegistryAPI).GetField<ClassRegistry>("registry");
 
-        api.RegisterEntityBehaviorClass("EntityPlayerPhysics", typeof(EntityPlayerPhysics));
+        Dictionary<string, Type> mappings = registry.GetField<Dictionary<string, Type>>("entityBehaviorClassNameToTypeMapping");
+        Dictionary<Type, string> mappingsTypeToBehavior = registry.GetField<Dictionary<Type, string>>("entityBehaviorTypeToClassNameMapping");
 
-        physicsManager = new PhysicsManager(api);
+        mappings.Remove("interpolateposition");
+        mappingsTypeToBehavior.Remove(typeof(EntityBehaviorInterpolatePosition));
+        api.RegisterEntityBehaviorClass("interpolateposition", typeof(EntityInterpolation));
+
+        mappings.Remove("passivephysics");
+        mappingsTypeToBehavior.Remove(typeof(EntityBehaviorPassivePhysics));
+        api.RegisterEntityBehaviorClass("passivephysics", typeof(EntityPassivePhysics));
+
+        mappings.Remove("controlledphysics");
+        mappingsTypeToBehavior.Remove(typeof(EntityControlledPhysics));
+        api.RegisterEntityBehaviorClass("controlledphysics", typeof(EntityControlledPhysics));
+
+        // Legacy physics for falling blocks and boats.
+        api.RegisterEntityBehaviorClass("legacyinterpolateposition", typeof(EntityBehaviorInterpolatePosition));
+        api.RegisterEntityBehaviorClass("legacypassivephysics", typeof(EntityBehaviorPassivePhysics));
+
+        mappings.Remove("playerphysics");
+        mappingsTypeToBehavior.Remove(typeof(EntityBehaviorPlayerPhysics));
+        api.RegisterEntityBehaviorClass("playerphysics", typeof(EntityPlayerPhysics));
     }
 
     public override void StartClientSide(ICoreClientAPI api)
@@ -51,6 +74,7 @@ public class NIM : ModSystem
 
         ClientMain main = api.World as ClientMain;
 
+        // Make the player not send positions at random intervals. They will now be sent in the player physics.
         List<GameTickListener> listeners = main.GetField<ClientEventManager>("eventManager").GetField<List<GameTickListener>>("GameTickListenersEntity");
         GameTickListener listenerFound = null;
         foreach (GameTickListener listener in listeners)
@@ -58,57 +82,94 @@ public class NIM : ModSystem
             if (listener.Millisecondinterval == 100 && listener.Handler.Target is SystemSendPosition)
             {
                 listenerFound = listener;
-                listener.Millisecondinterval = 100;
             }
         }
 
-        clientUpdateListener = listenerFound;
+        listeners.Remove(listenerFound);
 
         clientChannel = capi.Network.RegisterChannel("nim")
-            .RegisterMessageType<TickrateMessage>()
-            .SetMessageHandler<TickrateMessage>(OnTickrateReceived);
+            .RegisterMessageType<BulkAnimationPacket>()
+            .RegisterMessageType<NotificationPacket>()
+            .SetMessageHandler<BulkAnimationPacket>(HandleAnimationPacket)
+            .SetMessageHandler<NotificationPacket>(ClientNotified);
+
+        capi.Event.PlayerJoin += Event_PlayerJoin;
+    }
+
+    private void Event_PlayerJoin(IClientPlayer byPlayer)
+    {
+        clientChannel.SendPacket(new NotificationPacket());
+
+        listener = capi.Event.RegisterGameTickListener(dt =>
+        {
+            udpNetwork.SendConnectionPacket();
+        }, 1000);
+
+        capi.Event.PlayerJoin -= Event_PlayerJoin;
     }
 
     public override void StartServerSide(ICoreServerAPI api)
     {
         sapi = api;
 
-        ServerMain main = api.World as ServerMain;
+        serverChannel = sapi.Network.RegisterChannel("nim")
+            .RegisterMessageType<BulkAnimationPacket>()
+            .RegisterMessageType<NotificationPacket>()
+            .SetMessageHandler<NotificationPacket>(ServerNotified);
 
-        //Set the server sending entity position updates to the client to a new rate
-        List<GameTickListener> listeners = main.EventManager.GetField<List<GameTickListener>>("GameTickListenersEntity");
-        GameTickListener listenerFound = null;
-        foreach (GameTickListener listener in listeners)
+        sapi.Event.PlayerDisconnect += Event_PlayerDisconnect;
+    }
+
+    private void Event_PlayerDisconnect(IServerPlayer byPlayer)
+    {
+        IPEndPoint endPoint = udpNetwork.connectedClients.Get(byPlayer);
+
+        if (endPoint != null)
         {
-            if (listener.Millisecondinterval == 200 && listener.Handler.Target is ServerSystemEntitySimulation)
-            {
-                listenerFound = listener;
-                listener.Millisecondinterval = 100;
-            }
+            udpNetwork.endPoints.Remove(endPoint);
         }
 
-        serverUpdateListener = listenerFound;
-
-        serverChannel = sapi.Network.RegisterChannel("nim")
-            .RegisterMessageType<TickrateMessage>();
-
-        sapi.Event.PlayerJoin += UpdateTickrates;
-
-        sapi.RegisterCommand(new TickrateCommand(this));
+        udpNetwork.connectingClients.Remove(byPlayer.Entity.EntityId);
+        udpNetwork.connectedClients.Remove(byPlayer);
     }
 
-    public void UpdateTickrates(IServerPlayer byPlayer)
+    public long listener;
+
+    // Client notified that it's connected, stop sending connection requests.
+    public void ClientNotified(NotificationPacket packet)
     {
-        serverChannel.BroadcastPacket(new TickrateMessage()
+        capi.Event.UnregisterGameTickListener(listener);
+    }
+
+    // Server notified client is trying to connect.
+    public void ServerNotified(IServerPlayer fromPlayer, NotificationPacket packet)
+    {
+        udpNetwork.connectingClients.Add(fromPlayer.Entity.EntityId, fromPlayer);
+    }
+
+    // Animations have to be sent seperately from position due to possible loss.
+    public void HandleAnimationPacket(BulkAnimationPacket bulkPacket)
+    {
+        if (bulkPacket.packets == null) return;
+
+        for (int i = 0; i < bulkPacket.packets.Length; i++)
         {
-            tickrate = tickrate
-        });
-    }
+            AnimationPacket packet = bulkPacket.packets[i];
 
-    public void OnTickrateReceived(TickrateMessage packet)
-    {
-        tickrate = packet.tickrate;
-        clientUpdateListener.Millisecondinterval = 1000 / tickrate;
+            Entity entity = capi.World.GetEntityById(packet.entityId);
+
+            if (entity == null) continue;
+
+            if (entity.Properties?.Client?.LoadedShapeForEntity?.Animations != null)
+            {
+                float[] speeds = new float[packet.activeAnimationSpeedsCount];
+                for (int x = 0; x < speeds.Length; x++)
+                {
+                    speeds[x] = CollectibleNet.DeserializeFloatPrecise(packet.activeAnimationSpeeds[x]);
+                }
+                entity.OnReceivedServerAnimations(packet.activeAnimations, packet.activeAnimationsCount, speeds);
+            }
+        }
     }
 
     readonly Harmony harmony = new("networkimprovements");
@@ -135,50 +196,18 @@ public class NIM : ModSystem
         }
 
         physicsManager?.Dispose();
+        udpNetwork.Dispose();
     }
 
-    public static void AddPhysicsTickable(ICoreAPI api, PhysicsTickable entityBehavior)
+    // Add an entity to the physics ticking system on the server.
+    public static void RemovePhysicsTickable(ICoreAPI api, IPhysicsTickable entityBehavior)
     {
-        api.ModLoader.GetModSystem<NIM>().physicsManager.AddPhysicsTickable(entityBehavior);
+        api.ModLoader.GetModSystem<NIM>().physicsManager.toRemove.Enqueue(entityBehavior);
     }
 
-    public static void RemovePhysicsTickable(ICoreAPI api, PhysicsTickable entityBehavior)
+    // Remove an entity from the physics ticking system on the server.
+    public static void AddPhysicsTickable(ICoreAPI api, IPhysicsTickable entityBehavior)
     {
-        api.ModLoader.GetModSystem<NIM>().physicsManager.RemovePhysicsTickable(entityBehavior);
-    }
-}
-
-[ProtoContract(ImplicitFields = ImplicitFields.AllFields)]
-public class TickrateMessage
-{
-    public int tickrate;
-}
-
-public class TickrateCommand : ServerChatCommand
-{
-    NIM nim;
-
-    public TickrateCommand(NIM nim)
-    {
-        this.nim = nim;
-        Command = "nimtickrate";
-        Description = "Changes rate of entity updates";
-        Syntax = ".nimtickrate";
-        RequiredPrivilege = Privilege.ban;
-    }
-
-    public override void CallHandler(IPlayer player, int groupId, CmdArgs args)
-    {
-        try
-        {
-            nim.tickrate = args[0].ToInt();
-            nim.serverUpdateListener.Millisecondinterval = 1000 / nim.tickrate;
-            nim.UpdateTickrates(null);
-            nim.sapi.SendMessage(player, 0, $"Tickrate set to {nim.tickrate}.", EnumChatType.CommandSuccess);
-        }
-        catch
-        {
-
-        }
+        api.ModLoader.GetModSystem<NIM>().physicsManager.toAdd.Enqueue(entityBehavior);
     }
 }

@@ -6,7 +6,19 @@
     <OutputPath>bin\$(Configuration)\Mods\mod</OutputPath>
   </PropertyGroup>
 
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|AnyCPU'">
+    <NoWarn></NoWarn>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|AnyCPU'">
+    <NoWarn></NoWarn>
+  </PropertyGroup>
+
   <ItemGroup>
+    <Reference Include="SkiaSharp">
+      <HintPath>..\..\Users\Rajeesh\AppData\Roaming\Vintagestory\Lib\SkiaSharp.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
     <Reference Include="VintagestoryAPI">
       <HintPath>$(VINTAGE_STORY)/VintagestoryAPI.dll</HintPath>
       <Private>false</Private>
@@ -53,7 +65,9 @@
   <Content Include="assets\**">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
   </Content>
-  <None Remove="assets\networkmod\patches\arrow.json" />
+  <None Remove="assets\networkmod\patches\bear.json" />
+  <None Remove="assets\networkmod\patches\boat.json" />
+  <None Remove="assets\networkmod\patches\FallingBlock.json" />
   <None Remove="assets\networkmod\patches\player.json" />
   <Content Include="modinfo.json">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>

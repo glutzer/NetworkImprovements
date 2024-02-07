@@ -8,63 +8,74 @@ using Vintagestory.API.Datastructures;
 using Vintagestory.API.MathTools;
 using Vintagestory.API.Server;
 
-/// <summary>
-/// New version of controlled physics only applied on the server.
-/// Applies 30 times per second (or same as physics manager).
-/// </summary>
-public class EntityControlledPhysics : EntityBehavior, PhysicsTickable
+// New version of server-side controlled physics.
+public class EntityControlledPhysics : EntityBehavior, IPhysicsTickable
 {
+    public ICoreClientAPI capi;
+    public ICoreServerAPI sapi;
+
+    public bool remote = true;
+
     public const double collisionboxReductionForInsideBlocksCheck = 0.009;
-
-    public ICoreAPI api;
-
-    [ThreadStatic]
-    protected static CachingCollisionTester collisionTester;
-
-    public float stepHeight = 0.6f; //Read by AITaskTargetableBase
+    public float stepHeight = 0.6f;
     public bool smoothStepping = false;
     public bool isMountable;
 
+    public CachingCollisionTester collisionTester;
     public List<PModule> physicsModules = new();
 
-    public int tickCounter = 0;
-
     public Vec3d prevPos = new();
-    public Vec3d nextPosition = new();
     public Vec3d moveDelta = new();
-    public BlockPos tmpPos = new(0);
-    public Cuboidd entityBox = new();
+    public Vec3d nextPos = new();
     public Vec3d outPos = new();
 
+    public BlockPos tmpPos = new();
+    public Cuboidd entityBox = new();
     public List<FastVec3i> traversed = new(4);
     public IComparer<FastVec3i> fastVec3iComparer = new FastVec3iComparer();
 
+    // Used for calculating minimal physics and collision to trigger required things without doing a full simulation.
+    public EntityPos lPos = new();
+    public Vec3d nPos;
+
+    private double prevYMotion;
+    private bool onGroundBefore;
+    private bool feetInLiquidBefore;
+    private bool swimmingBefore;
+
     public EntityControlledPhysics(Entity entity) : base(entity)
     {
-        api = entity.Api;
-        isMountable = entity is IMountable || entity is IMountableSupplier;
+        
     }
 
-    /// <summary>
-    /// What modules will be applied in order to this entity.
-    /// </summary>
     public virtual void SetModules()
     {
+        physicsModules.Add(new PModuleWind());
         physicsModules.Add(new PModuleOnGround());
         physicsModules.Add(new PModuleInLiquid());
         physicsModules.Add(new PModuleInAir());
         physicsModules.Add(new PModuleGravity());
         physicsModules.Add(new PModuleMotionDrag());
+        physicsModules.Add(new PModuleKnockback());
     }
 
-    /// <summary>
-    /// Called when entity is loaded.
-    /// </summary>
     public override void Initialize(EntityProperties properties, JsonObject attributes)
     {
-        SetModules();
+        // Only logical on the server.
+        if (entity.Api.Side == EnumAppSide.Server) remote = false;
 
         stepHeight = attributes["stepHeight"].AsFloat(0.6f);
+
+        sneakTestCollisionbox = entity.CollisionBox.Clone().OmniNotDownGrowBy(-0.1f);
+        sneakTestCollisionbox.Y2 /= 2;
+
+        isMountable = entity is IMountable || entity is IMountableSupplier;
+
+        if (!remote)
+        {
+            NIM.AddPhysicsTickable(entity.Api, this);
+            SetModules();
+        }
 
         JsonObject physics = properties?.Attributes?["physics"];
         for (int i = 0; i < physicsModules.Count; i++)
@@ -72,57 +83,141 @@ public class EntityControlledPhysics : EntityBehavior, PhysicsTickable
             physicsModules[i].Initialize(physics, entity);
         }
 
-        sneakTestCollisionbox = entity.CollisionBox.Clone().OmniNotDownGrowBy(-0.1f);
-        sneakTestCollisionbox.Y2 /= 2;
+        if (entity.Api is ICoreClientAPI) capi = entity.Api as ICoreClientAPI;
+        if (entity.Api is ICoreServerAPI) sapi = entity.Api as ICoreServerAPI;
 
-        if (entity is not EntityPlayer)
+        entity.PhysicsUpdateWatcher?.Invoke(0, entity.SidedPos.XYZ);
+
+        // In entity, make this always set it to 1.
+        // Also instead of freezing the pitch in EntityShapeRenderer, make it normal.
+        if (remote)
         {
-            NIM.AddPhysicsTickable(api, this);
+            EnumHandling handling = EnumHandling.Handled;
+            OnReceivedServerPos(true, ref handling);
+
+            entity.Attributes.RegisterModifiedListener("dmgkb", () =>
+            {
+                if (entity.Attributes.GetInt("dmgkb") == 1)
+                {
+                    kbCounter = 2;
+                }
+            });
         }
     }
 
-    /// <summary>
-    /// Called 30 times per second on both client and server.
-    /// </summary>
-    public virtual void OnPhysicsTick(float dt)
+    public float updateInterval = 1 / 15f;
+
+    // Use server motion.
+    public override void OnReceivedServerPos(bool isTeleport, ref EnumHandling handled)
     {
-        if (entity.State != EnumEntityState.Active) return;
+        if (!remote) return;
 
-        //Clear all traversed blocks this tick
-        traversed.Clear();
+        if (nPos == null)
+        {
+            nPos = new();
+            nPos.Set(entity.ServerPos);
+        }
 
-        SetupKnockbackValues(); //REPLACE KNOCKBACK WITH A JUMP-LIKE MOTION IN PHYSICS MODULES
+        bool lowRes = entity.WatchedAttributes.GetBool("lr");
+        float dt = updateInterval;
 
-        //Setup collision for a new tick
-        collisionTester ??= new CachingCollisionTester();
-        collisionTester.NewTick();
+        if (lowRes) dt *= 5;
 
-        prevPos.Set(entity.Pos.X, entity.Pos.Y, entity.Pos.Z);
+        float dtFactor = dt * 60;
 
-        //Get controls
+        lPos.SetFrom(nPos);
+        nPos.Set(entity.ServerPos);
+
+        if (isTeleport)
+        {
+            lPos.SetFrom(nPos);
+        }
+
+        lPos.Motion.X = (nPos.X - lPos.X) / dtFactor;
+        lPos.Motion.Y = (nPos.Y - lPos.Y) / dtFactor;
+        lPos.Motion.Z = (nPos.Z - lPos.Z) / dtFactor;
+
+        if (lPos.Motion.Length() > 20)
+        {
+            lPos.Motion.Set(0, 0, 0);
+        }
+
+        // Set client motion.
+        entity.Pos.Motion.Set(lPos);
+        entity.ServerPos.Motion.Set(lPos.Motion);
+
+        EntityAgent agent = entity as EntityAgent;
+        if (agent?.MountedOn != null)
+        {
+            entity.Swimming = false;
+            entity.OnGround = false;
+
+            if (capi != null)
+            {
+                entity.Pos.SetPos(agent.MountedOn.MountPosition);
+            }
+
+            entity.ServerPos.Motion.X = 0;
+            entity.ServerPos.Motion.Y = 0;
+            entity.ServerPos.Motion.Z = 0;
+            return;
+        }
+
+        // Set pos for triggering events.
+        entity.Pos.SetFrom(entity.ServerPos);
+
+        prevPos.Set(lPos);
+
+        SetState(lPos, dt);
+
+        // Apply gravity then set collision.
+        double gravityStrength = (1 / 60f * dtFactor) + Math.Max(0, -0.015f * lPos.Motion.Y * dtFactor);
+        lPos.Motion.Y -= gravityStrength;
+        collisionTester.ApplyTerrainCollision(entity, lPos, dtFactor, ref outPos, 0, 0);
+        bool falling = lPos.Motion.Y < 0;
+        entity.OnGround = entity.CollidedVertically && falling;
+        lPos.Motion.Y += gravityStrength;
+
+        lPos.SetPos(nPos);
+
         EntityControls controls = ((EntityAgent)entity).Controls;
 
-        //Apply to server position only
-        EntityPos pos = entity.ServerPos;
+        ApplyTests(lPos, controls, dt);
 
-        //Shared loop
-        TickEntityPhysics(pos, controls, dt);
-
-        //Using dt instead of accum
-        entity.PhysicsUpdateWatcher?.Invoke(dt, prevPos);
+        // Knockback is only removed on the server in the knockback module. It needs to be set on the client so entities don't remain tilted.
+        // Should always set it to 1 when taking damage instead of when it's 0 in the entity class so the timer can always get updated.
+        // Entity should tilt back to normal state if it's being knocked back too.
+        if (kbCounter > 0)
+        {
+            kbCounter -= dt;
+        }
+        else
+        {
+            kbCounter = 0;
+            entity.Attributes.SetInt("dmgkb", 0);
+        }
     }
 
-    /// <summary>
-    /// Shared between classes.
-    /// </summary>
-    public void TickEntityPhysics(EntityPos pos, EntityControls controls, float dt)
+    public int kbState;
+    public float kbCounter = 0;
+
+    public void SetState(EntityPos pos, float dt)
     {
         float dtFactor = dt * 60;
 
-        //Adjust collision box of dead entities
-        if (!entity.Alive) AdjustCollisionBoxToAnimation(dtFactor);
+        prevYMotion = pos.Motion.Y;
+        onGroundBefore = entity.OnGround;
+        feetInLiquidBefore = entity.FeetInLiquid;
+        swimmingBefore = entity.Swimming;
 
-        //Apply every physics module
+        traversed.Clear();
+        collisionTester ??= new CachingCollisionTester();
+        collisionTester.NewTick();
+        if (!entity.Alive) AdjustCollisionBoxToAnimation(dtFactor);
+    }
+
+    public void ApplyMotion(EntityPos pos, EntityControls controls, float dt)
+    {
         foreach (PModule physicsModule in physicsModules)
         {
             if (physicsModule.Applicable(entity, pos, controls))
@@ -131,57 +226,56 @@ public class EntityControlledPhysics : EntityBehavior, PhysicsTickable
             }
         }
 
-        EntityAgent agent = entity as EntityAgent;
-        if (agent?.MountedOn != null)
-        {
-            entity.Swimming = false;
-            entity.OnGround = false;
-
-            //Originally only set on the client but it should be set here on the server
-            //If the entities are at the same position after physics ticks they should interpolate smoothly
-            pos.SetPos(agent.MountedOn.MountPosition);
-
-            pos.Motion.X = 0;
-            pos.Motion.Y = 0;
-            pos.Motion.Z = 0;
-            return;
-        }
-
-        //Clamp motion over 100 blocks/s
         if (pos.Motion.LengthSq() > 100)
         {
             pos.Motion.X = GameMath.Clamp(pos.Motion.X, -10, 10);
             pos.Motion.Y = GameMath.Clamp(pos.Motion.Y, -10, 10);
             pos.Motion.Z = GameMath.Clamp(pos.Motion.Z, -10, 10);
         }
-
-        //Collide with blocks if noclip isn't on
-        if (!controls.NoClip)
-        {
-            //This handles pretty much everything else like increasing position by motion
-            CollideAndMove(pos, controls, dt, dtFactor);
-        }
-        else
-        {
-            //Apply extra motion while noclipping?
-            pos.X += pos.Motion.X * dt * 60f;
-            pos.Y += pos.Motion.Y * dt * 60f;
-            pos.Z += pos.Motion.Z * dt * 60f;
-
-            entity.Swimming = false;
-            entity.FeetInLiquid = false;
-            entity.OnGround = false;
-        }
     }
 
-    /// <summary>
-    /// Call on entity inside events.
-    /// </summary>
+    public virtual void OnPhysicsTick(float dt)
+    {
+        if (entity.State != EnumEntityState.Active) return;
+
+        EntityPos pos = entity.SidedPos;
+        EntityControls controls = ((EntityAgent)entity).Controls;
+
+        prevPos.Set(pos);
+        
+        EntityAgent agent = entity as EntityAgent;
+        if (agent?.MountedOn != null)
+        {
+            entity.Swimming = false;
+            entity.OnGround = false;
+
+            pos.SetPos(agent.MountedOn.MountPosition);
+
+            pos.Motion.X = 0;
+            pos.Motion.Y = 0;
+            pos.Motion.Z = 0;
+
+            return;
+        }
+
+        // For falling.
+        if (entity.World.Side == EnumAppSide.Server)
+        {
+            entity.Pos.SetFrom(entity.ServerPos);
+        }
+
+        SetState(pos, dt);
+        ApplyMotion(pos, controls, dt);
+        ApplyTests(pos, controls, dt);
+
+        entity.PhysicsUpdateWatcher?.Invoke(dt, prevPos);
+    }
+
     public virtual void AfterPhysicsTick(float dt)
     {
         if (entity.State != EnumEntityState.Active) return;
 
-        //Call OnEntityInside events
+        // Call OnEntityInside events.
         IBlockAccessor blockAccessor = entity.World.BlockAccessor;
         tmpPos.Set(-1, -1, -1);
         Block block = null;
@@ -196,165 +290,37 @@ public class EntityControlledPhysics : EntityBehavior, PhysicsTickable
         }
     }
 
-    public override string PropertyName()
+    public void ApplyTests(EntityPos pos, EntityControls controls, float dt)
     {
-        return "entitycontrolledphysics";
-    }
+        IBlockAccessor blockAccessor = entity.World.BlockAccessor;
 
-    public ref int FlagTickDone { get => ref serverPhysicsTickDone; }
-    public volatile int serverPhysicsTickDone;
-    public override void OnEntityDespawn(EntityDespawnData despawn)
-    {
-        NIM.RemovePhysicsTickable(api, this);
-    }
+        prevYMotion = pos.Motion.Y;
 
-    #region Knockback
+        float dtFactor = dt * 60;
 
-    public Vec3d knockbackDirection;
-    public int knockbackState;
-    public void SetupKnockbackValues()
-    {
-        //No accumulation for now. See what happens with these values
-        //dmgkb is set back to 0 in controlled physics somewhere
-        knockbackState = entity.Attributes.GetInt("dmgkb");
-        if (knockbackState > 0)
-        {
-            if (knockbackState == 1)
-            {
-                double kbX = entity.WatchedAttributes.GetDouble("kbdirX");
-                double kbY = entity.WatchedAttributes.GetDouble("kbdirY");
-                double kbZ = entity.WatchedAttributes.GetDouble("kbdirZ");
-                knockbackDirection = new Vec3d(kbX, kbY, kbZ);
-            }
-        }
-        else
-        {
-            knockbackDirection = null;
-        }
-    }
-
-    #endregion
-
-    #region Collision
-
-    public Matrixf tmpModelMat = new();
-    public void AdjustCollisionBoxToAnimation(float dtFac)
-    {
-        AttachmentPointAndPose apap = entity.AnimManager.Animator?.GetAttachmentPointPose("Center");
-
-        if (apap == null) return;
-
-        float[] hitboxOff = new float[4] { 0, 0, 0, 1 };
-        AttachmentPoint ap = apap.AttachPoint;
-
-        float rotX = entity.Properties.Client.Shape != null ? entity.Properties.Client.Shape.rotateX : 0;
-        float rotY = entity.Properties.Client.Shape != null ? entity.Properties.Client.Shape.rotateY : 0;
-        float rotZ = entity.Properties.Client.Shape != null ? entity.Properties.Client.Shape.rotateZ : 0;
-
-        float[] ModelMat = Mat4f.Create();
-        Mat4f.Identity(ModelMat);
-        Mat4f.Translate(ModelMat, ModelMat, 0, entity.CollisionBox.Y2 / 2, 0);
-
-        double[] quat = Quaterniond.Create();
-        Quaterniond.RotateX(quat, quat, entity.Pos.Pitch + rotX * GameMath.DEG2RAD);
-        Quaterniond.RotateY(quat, quat, entity.Pos.Yaw + (rotY + 90) * GameMath.DEG2RAD);
-        Quaterniond.RotateZ(quat, quat, entity.Pos.Roll + rotZ * GameMath.DEG2RAD);
-
-        float[] qf = new float[quat.Length];
-        for (int k = 0; k < quat.Length; k++) qf[k] = (float)quat[k];
-        Mat4f.Mul(ModelMat, ModelMat, Mat4f.FromQuat(Mat4f.Create(), qf));
-
-        float scale = entity.Properties.Client.Size;
-
-        Mat4f.Translate(ModelMat, ModelMat, 0, -entity.CollisionBox.Y2 / 2, 0f);
-        Mat4f.Scale(ModelMat, ModelMat, new float[] { scale, scale, scale });
-        Mat4f.Translate(ModelMat, ModelMat, -0.5f, 0, -0.5f);
-
-        tmpModelMat
-            .Set(ModelMat)
-            .Mul(apap.AnimModelMatrix)
-            .Translate(ap.PosX / 16f, ap.PosY / 16f, ap.PosZ / 16f)
-        ;
-
-        EntityPos entityPos = entity.SidedPos;
-
-        float[] endVec = Mat4f.MulWithVec4(tmpModelMat.Values, hitboxOff);
-
-        float motionX = endVec[0] - (entity.CollisionBox.X1 - entity.OriginCollisionBox.X1);
-        float motionZ = endVec[2] - (entity.CollisionBox.Z1 - entity.OriginCollisionBox.Z1);
-
-        if (Math.Abs(motionX) > 0.00001 || Math.Abs(motionZ) > 0.00001)
-        {
-            EntityPos posMoved = entityPos.Copy();
-            posMoved.Motion.X = motionX;
-            posMoved.Motion.Z = motionZ;
-
-            moveDelta.Set(posMoved.Motion.X, posMoved.Motion.Y, posMoved.Motion.Z);
-
-            collisionTester.ApplyTerrainCollision(entity, posMoved, dtFac, ref outPos);
-
-            double reflectX = (outPos.X - entityPos.X) / dtFac - motionX;
-            double reflectZ = (outPos.Z - entityPos.Z) / dtFac - motionZ;
-
-            entityPos.Motion.X = reflectX;
-            entityPos.Motion.Z = reflectZ;
-
-            entity.CollisionBox.Set(entity.OriginCollisionBox);
-            entity.CollisionBox.Translate(endVec[0], 0, endVec[2]);
-
-            entity.SelectionBox.Set(entity.OriginSelectionBox);
-            entity.SelectionBox.Translate(endVec[0], 0, endVec[2]);
-        }
-    }
-
-    /// <summary>
-    /// Do all collisions with blocks.
-    /// Handle the rest.
-    /// </summary>
-    public void CollideAndMove(EntityPos pos, EntityControls controls, float dt, float dtFactor)
-    {
-        IBlockAccessor blockAccess = entity.World.BlockAccessor;
-        double prevYMotion = pos.Motion.Y;
-
-        //Set amount that should be moved this physics tick based on the motion
         moveDelta.Set(pos.Motion.X * dtFactor, prevYMotion * dtFactor, pos.Motion.Z * dtFactor);
+        nextPos.Set(pos.X + moveDelta.X, pos.Y + moveDelta.Y, pos.Z + moveDelta.Z);
 
-        //Set next position the entity will be at after this
-        nextPosition.Set(pos.X + moveDelta.X, pos.Y + moveDelta.Y, pos.Z + moveDelta.Z);
-
-        //If y is negative you're falling
         bool falling = prevYMotion < 0;
 
-        //Variables related to previous position
-        bool feetInLiquidBefore = entity.FeetInLiquid;
-        bool onGroundBefore = entity.OnGround;
-        bool swimmingBefore = entity.Swimming;
-
-        //Re-check climbing
         controls.IsClimbing = false;
         entity.ClimbingOnFace = null;
         entity.ClimbingIntoFace = null;
-
-        //Apply climbing controls, all adjusts motion
         if (entity.Properties.CanClimb == true)
         {
             int height = (int)Math.Ceiling(entity.CollisionBox.Y2);
-
             entityBox.SetAndTranslate(entity.CollisionBox, pos.X, pos.Y, pos.Z);
-
             for (int dy = 0; dy < height; dy++)
             {
                 tmpPos.Set((int)pos.X, (int)pos.Y + dy, (int)pos.Z);
-                Block inBlock = blockAccess.GetBlock(tmpPos);
+                Block inBlock = blockAccessor.GetBlock(tmpPos);
                 if (!inBlock.IsClimbable(tmpPos) && !entity.Properties.CanClimbAnywhere) continue;
-
-                Cuboidf[] collBoxes = inBlock.GetCollisionBoxes(blockAccess, tmpPos);
-                if (collBoxes == null) continue;
-
-                for (int i = 0; i < collBoxes.Length; i++)
+                Cuboidf[] collisionBoxes = inBlock.GetCollisionBoxes(blockAccessor, tmpPos);
+                if (collisionBoxes == null) continue;
+                for (int i = 0; i < collisionBoxes.Length; i++)
                 {
-                    double dist = entityBox.ShortestDistanceFrom(collBoxes[i], tmpPos);
-                    controls.IsClimbing |= dist < entity.Properties.ClimbTouchDistance;
+                    double distance = entityBox.ShortestDistanceFrom(collisionBoxes[i], tmpPos);
+                    controls.IsClimbing |= distance < entity.Properties.ClimbTouchDistance;
 
                     if (controls.IsClimbing)
                     {
@@ -370,10 +336,10 @@ public class EntityControlledPhysics : EntityBehavior, PhysicsTickable
                 if (walkIntoFace != null)
                 {
                     tmpPos.Set((int)pos.X + walkIntoFace.Normali.X, (int)pos.Y + walkIntoFace.Normali.Y, (int)pos.Z + walkIntoFace.Normali.Z);
-                    Block inBlock = blockAccess.GetBlock(tmpPos);
+                    Block inBlock = blockAccessor.GetBlock(tmpPos);
 
-                    Cuboidf[] collBoxes = inBlock.GetCollisionBoxes(blockAccess, tmpPos);
-                    entity.ClimbingIntoFace = (collBoxes != null && collBoxes.Length != 0) ? walkIntoFace : null;
+                    Cuboidf[] collisionBoxes = inBlock.GetCollisionBoxes(blockAccessor, tmpPos);
+                    entity.ClimbingIntoFace = (collisionBoxes != null && collisionBoxes.Length != 0) ? walkIntoFace : null;
                 }
             }
 
@@ -383,21 +349,21 @@ public class EntityControlledPhysics : EntityBehavior, PhysicsTickable
                 for (int dy = 0; dy < height; dy++)
                 {
                     tmpPos.Set((int)pos.X + facing.Normali.X, (int)pos.Y + dy, (int)pos.Z + facing.Normali.Z);
-                    Block inBlock = blockAccess.GetBlock(tmpPos);
+                    Block inBlock = blockAccessor.GetBlock(tmpPos);
                     if (!inBlock.IsClimbable(tmpPos) && !(entity.Properties.CanClimbAnywhere && entity.Alive)) continue;
 
-                    Cuboidf[] collBoxes = inBlock.GetCollisionBoxes(blockAccess, tmpPos);
-                    if (collBoxes == null) continue;
+                    Cuboidf[] collisionBoxes = inBlock.GetCollisionBoxes(blockAccessor, tmpPos);
+                    if (collisionBoxes == null) continue;
 
-                    for (int j = 0; j < collBoxes.Length; j++)
+                    for (int j = 0; j < collisionBoxes.Length; j++)
                     {
-                        double distance = entityBox.ShortestDistanceFrom(collBoxes[j], tmpPos);
+                        double distance = entityBox.ShortestDistanceFrom(collisionBoxes[j], tmpPos);
                         controls.IsClimbing |= distance < entity.Properties.ClimbTouchDistance;
 
                         if (controls.IsClimbing)
                         {
                             entity.ClimbingOnFace = facing;
-                            entity.ClimbingOnCollBox = collBoxes[j];
+                            entity.ClimbingOnCollBox = collisionBoxes[j];
                             break;
                         }
                     }
@@ -405,86 +371,84 @@ public class EntityControlledPhysics : EntityBehavior, PhysicsTickable
             }
         }
 
-        if (controls.IsClimbing)
+        if (!remote)
         {
-            if (controls.WalkVector.Y == 0)
+            if (controls.IsClimbing)
             {
-                pos.Motion.Y = controls.Sneak ? Math.Max(-0.07, pos.Motion.Y - 0.07) : pos.Motion.Y;
-                if (controls.Jump) pos.Motion.Y = 0.035 * dt * 60f;
-            }
-        }
-
-        //Test collision with terrain
-        collisionTester.ApplyTerrainCollision(entity, pos, dtFactor, ref outPos, stepHeight);
-
-        //Step up blocks
-        if (!entity.Properties.CanClimbAnywhere)
-        {
-            if (smoothStepping)
-            {
-                controls.IsStepping = HandleSteppingOnBlocksSmooth(pos, moveDelta, dtFactor, controls);
-            }
-            else
-            {
-                controls.IsStepping = HandleSteppingOnBlocks(pos, moveDelta, dtFactor, controls);
-            }
-        }
-
-        //Sneaking, whether you will run off a cliff or not
-        HandleSneaking(pos, controls, dt);
-
-        if (entity.CollidedHorizontally && !controls.IsClimbing && !controls.IsStepping && entity.Properties.Habitat != EnumHabitat.Underwater)
-        {
-            if (blockAccess.GetBlock((int)pos.X, (int)(pos.Y + 0.5), (int)pos.Z).LiquidLevel >= 7 || blockAccess.GetBlock((int)pos.X, (int)pos.Y, (int)pos.Z).LiquidLevel >= 7 || (blockAccess.GetBlock((int)pos.X, (int)(pos.Y - 0.05), (int)pos.Z).LiquidLevel >= 7))
-            {
-                pos.Motion.Y += 0.2 * dt;
-                controls.IsStepping = true;
-            }
-            else //Attempt to prevent endless collisions
-            {
-                double absX = Math.Abs(pos.Motion.X);
-                double absZ = Math.Abs(pos.Motion.Z);
-                if (absX > absZ)
+                if (controls.WalkVector.Y == 0)
                 {
-                    if (absZ < 0.001) pos.Motion.Z += pos.Motion.Z < 0 ? -0.0025 : 0.0025;
+                    pos.Motion.Y = controls.Sneak ? Math.Max(-0.07, pos.Motion.Y - 0.07) : pos.Motion.Y;
+                    if (controls.Jump) pos.Motion.Y = 0.035 * dt * 60f;
+                }
+            }
+
+            collisionTester.ApplyTerrainCollision(entity, pos, dtFactor, ref outPos, stepHeight);
+
+            if (!entity.Properties.CanClimbAnywhere)
+            {
+                if (smoothStepping)
+                {
+                    controls.IsStepping = HandleSteppingOnBlocksSmooth(pos, moveDelta, dtFactor, controls);
                 }
                 else
                 {
-                    if (absX < 0.001) pos.Motion.X += pos.Motion.X < 0 ? -0.0025 : 0.0025;
+                    controls.IsStepping = HandleSteppingOnBlocks(pos, moveDelta, dtFactor, controls);
                 }
             }
-        }
 
-        if (outPos.X != pos.X && blockAccess.IsNotTraversable(pos.X + pos.Motion.X * dt * 60f, pos.Y, pos.Z))
-        {
-            outPos.X = pos.X;
-        }
-        if (outPos.Y != pos.Y && blockAccess.IsNotTraversable(pos.X, pos.Y + pos.Motion.Y * dt * 60f, pos.Z))
-        {
-            outPos.Y = pos.Y;
-        }
-        if (outPos.Z != pos.Z && blockAccess.IsNotTraversable(pos.X, pos.Y, pos.Z + pos.Motion.Z * dt * 60f))
-        {
-            outPos.Z = pos.Z;
-        }
+            HandleSneaking(pos, controls, dt);
 
-        pos.SetPos(outPos);
+            if (entity.CollidedHorizontally && !controls.IsClimbing && !controls.IsStepping && entity.Properties.Habitat != EnumHabitat.Underwater)
+            {
+                if (blockAccessor.GetBlock((int)pos.X, (int)(pos.Y + 0.5), (int)pos.Z).LiquidLevel >= 7 || blockAccessor.GetBlock((int)pos.X, (int)pos.Y, (int)pos.Z).LiquidLevel >= 7 || (blockAccessor.GetBlock((int)pos.X, (int)(pos.Y - 0.05), (int)pos.Z).LiquidLevel >= 7))
+                {
+                    pos.Motion.Y += 0.2 * dt;
+                    controls.IsStepping = true;
+                }
+                else
+                {
+                    double absX = Math.Abs(pos.Motion.X);
+                    double absZ = Math.Abs(pos.Motion.Z);
+                    if (absX > absZ)
+                    {
+                        if (absZ < 0.001) pos.Motion.Z += pos.Motion.Z < 0 ? -0.0025 : 0.0025;
+                    }
+                    else
+                    {
+                        if (absX < 0.001) pos.Motion.X += pos.Motion.X < 0 ? -0.0025 : 0.0025;
+                    }
+                }
+            }
 
-        //Set motion to 0 if collision detected
+            if (outPos.X != pos.X && blockAccessor.IsNotTraversable(pos.X + moveDelta.X, pos.Y, pos.Z))
+            {
+                outPos.X = pos.X;
+            }
+            if (outPos.Y != pos.Y && blockAccessor.IsNotTraversable(pos.X, pos.Y + moveDelta.Y, pos.Z))
+            {
+                outPos.Y = pos.Y;
+            }
+            if (outPos.Z != pos.Z && blockAccessor.IsNotTraversable(pos.X, pos.Y, pos.Z + moveDelta.Z))
+            {
+                outPos.Z = pos.Z;
+            }
 
-        if ((nextPosition.X < outPos.X && pos.Motion.X < 0) || (nextPosition.X > outPos.X && pos.Motion.X > 0))
-        {
-            pos.Motion.X = 0;
-        }
+            pos.SetPos(outPos);
 
-        if ((nextPosition.Y < outPos.Y && pos.Motion.Y < 0) || (nextPosition.Y > outPos.Y && pos.Motion.Y > 0))
-        {
-            pos.Motion.Y = 0;
-        }
+            if ((nextPos.X < outPos.X && pos.Motion.X < 0) || (nextPos.X > outPos.X && pos.Motion.X > 0))
+            {
+                pos.Motion.X = 0;
+            }
 
-        if ((nextPosition.Z < outPos.Z && pos.Motion.Z < 0) || (nextPosition.Z > outPos.Z && pos.Motion.Z > 0))
-        {
-            pos.Motion.Z = 0;
+            if ((nextPos.Y < outPos.Y && pos.Motion.Y < 0) || (nextPos.Y > outPos.Y && pos.Motion.Y > 0))
+            {
+                pos.Motion.Y = 0;
+            }
+
+            if ((nextPos.Z < outPos.Z && pos.Motion.Z < 0) || (nextPos.Z > outPos.Z && pos.Motion.Z > 0))
+            {
+                pos.Motion.Z = 0;
+            }
         }
 
         float offX = entity.CollisionBox.X2 - entity.OriginCollisionBox.X2;
@@ -493,42 +457,48 @@ public class EntityControlledPhysics : EntityBehavior, PhysicsTickable
         int posX = (int)(pos.X + offX);
         int posZ = (int)(pos.Z + offZ);
 
-        Block blockFluid = blockAccess.GetBlock(posX, (int)pos.Y, posZ, BlockLayersAccess.Fluid);
-        Block middleWOIBlock = blockAccess.GetBlock(posX, (int)(pos.Y + entity.SwimmingOffsetY), posZ, BlockLayersAccess.Fluid);
+        Block blockFluid = blockAccessor.GetBlock(posX, (int)pos.Y, posZ, BlockLayersAccess.Fluid);
+        Block middleWOIBlock = blockAccessor.GetBlock(posX, (int)(pos.Y + entity.SwimmingOffsetY), posZ, BlockLayersAccess.Fluid);
 
         entity.OnGround = (entity.CollidedVertically && falling && !controls.IsClimbing) || controls.IsStepping;
         entity.FeetInLiquid = false;
+
         if (blockFluid.IsLiquid())
         {
-            Block aboveBlock = blockAccess.GetBlock(posX, (int)(pos.Y + 1), posZ, BlockLayersAccess.Fluid);
+            Block aboveBlock = blockAccessor.GetBlock(posX, (int)(pos.Y + 1), posZ, BlockLayersAccess.Fluid);
             entity.FeetInLiquid = (blockFluid.LiquidLevel + (aboveBlock.LiquidLevel > 0 ? 1 : 0)) / 8f >= pos.Y - (int)pos.Y;
         }
+
         entity.InLava = blockFluid.LiquidCode == "lava";
         entity.Swimming = middleWOIBlock.IsLiquid();
 
-        //Entity behavior health calls this
-        //With the player the client has authority over this and sends a packet to the server to call this. This way there's no wrong fall damage.
         if (!onGroundBefore && entity.OnGround)
         {
+            /*
+            (entity as EntityAgent).ServerControls.Gliding = false;
+            (entity as EntityAgent).ServerControls.IsFlying = false;
+            (entity as EntityAgent).ServerControls.GlideSpeed = 0;
+
+            controls.Gliding = false;
+            controls.IsFlying = false;
+            controls.GlideSpeed = 0;
+
+            if (controls.Gliding || (entity as EntityAgent).ServerControls.Gliding)
+            {
+                entity.PositionBeforeFalling.Set(pos);
+            }
+            */
+
             entity.OnFallToGround(prevYMotion);
         }
 
-        if ((!entity.Swimming && !feetInLiquidBefore && entity.FeetInLiquid) || (!entity.FeetInLiquid && !swimmingBefore && entity.Swimming))
-        {
-            entity.OnCollideWithLiquid();
-        }
+        if (!feetInLiquidBefore && entity.FeetInLiquid) entity.OnCollideWithLiquid();
 
-        if ((swimmingBefore && !entity.Swimming && !entity.FeetInLiquid) || (feetInLiquidBefore && !entity.FeetInLiquid && !entity.Swimming))
-        {
-            entity.OnExitedLiquid();
-        }
+        if ((swimmingBefore && !entity.Swimming && !entity.FeetInLiquid) || (feetInLiquidBefore && !entity.FeetInLiquid && !entity.Swimming)) entity.OnExitedLiquid();
 
-        if (!falling || entity.OnGround || controls.IsClimbing)
-        {
-            entity.PositionBeforeFalling.Set(outPos);
-        }
+        //if (!falling || entity.OnGround || controls.IsClimbing) entity.PositionBeforeFalling.Set(outPos);
+        if (!falling || entity.OnGround || controls.IsClimbing) entity.PositionBeforeFalling.Set(pos);
 
-        //Not sure what this is
         Cuboidd testedEntityBox = collisionTester.entityBox;
         int xMax = (int)(testedEntityBox.X2 - collisionboxReductionForInsideBlocksCheck);
         int yMax = (int)(testedEntityBox.Y2 - collisionboxReductionForInsideBlocksCheck);
@@ -550,11 +520,6 @@ public class EntityControlledPhysics : EntityBehavior, PhysicsTickable
         }
     }
 
-    #endregion
-
-    #region Sneaking
-
-    //Sneaking entities can't leap over cliffs
     public Cuboidf sneakTestCollisionbox = new();
     public void HandleSneaking(EntityPos pos, EntityControls controls, float dt)
     {
@@ -562,7 +527,7 @@ public class EntityControlledPhysics : EntityBehavior, PhysicsTickable
 
         //Sneak to prevent falling off blocks
         Vec3d testPosition = new();
-        testPosition.Set(pos.X, pos.Y - GlobalConstants.GravityPerSecond * dt, pos.Z);
+        testPosition.Set(pos.X, pos.Y - (GlobalConstants.GravityPerSecond * dt), pos.Z);
 
         //Only apply this if the entity is on the ground in the first place
         if (!collisionTester.IsColliding(entity.World.BlockAccessor, sneakTestCollisionbox, testPosition)) return;
@@ -571,10 +536,9 @@ public class EntityControlledPhysics : EntityBehavior, PhysicsTickable
         Block belowBlock = entity.World.BlockAccessor.GetBlock(tmpPos);
 
         //Test for X
-        testPosition.Set(outPos.X, outPos.Y - GlobalConstants.GravityPerSecond * dt, pos.Z);
+        testPosition.Set(outPos.X, outPos.Y - (GlobalConstants.GravityPerSecond * dt), pos.Z);
         if (!collisionTester.IsColliding(entity.World.BlockAccessor, sneakTestCollisionbox, testPosition))
         {
-            //COMMENT: weird hack so you can climb down ladders more easily
             if (belowBlock.IsClimbable(tmpPos))
             {
                 outPos.X += (pos.X - outPos.X) / 10;
@@ -586,10 +550,9 @@ public class EntityControlledPhysics : EntityBehavior, PhysicsTickable
         }
 
         //Test for Z
-        testPosition.Set(pos.X, outPos.Y - GlobalConstants.GravityPerSecond * dt, outPos.Z);
+        testPosition.Set(pos.X, outPos.Y - (GlobalConstants.GravityPerSecond * dt), outPos.Z);
         if (!collisionTester.IsColliding(entity.World.BlockAccessor, sneakTestCollisionbox, testPosition))
         {
-            //COMMENT: weird hack so you can climb down ladders more easily
             if (belowBlock.IsClimbable(tmpPos))
             {
                 outPos.Z += (pos.Z - outPos.Z) / 10;
@@ -601,18 +564,15 @@ public class EntityControlledPhysics : EntityBehavior, PhysicsTickable
         }
     }
 
-    #endregion
-
-    #region Stepping
-
     public Cuboidd steppingCollisionBox = new();
     public Vec3d steppingTestVec = new();
     public Vec3d steppingTestMotion = new();
+
     private bool HandleSteppingOnBlocks(EntityPos pos, Vec3d moveDelta, float dtFac, EntityControls controls)
     {
-        if (controls.WalkVector.X == 0 && controls.WalkVector.Z == 0) return false; //Don't attempt to step up if not moving
+        if (controls.WalkVector.X == 0 && controls.WalkVector.Z == 0) return false;
 
-        if ((!entity.OnGround && !entity.Swimming) || entity.Properties.Habitat == EnumHabitat.Underwater) return false; //Don't try to step up if a fish or if flying
+        if ((!entity.OnGround && !entity.Swimming) || entity.Properties.Habitat == EnumHabitat.Underwater) return false;
 
         steppingCollisionBox.SetAndTranslate(entity.CollisionBox, pos.X, pos.Y, pos.Z);
         steppingCollisionBox.Y2 = Math.Max(steppingCollisionBox.Y1 + stepHeight, steppingCollisionBox.Y2);
@@ -639,15 +599,12 @@ public class EntityControlledPhysics : EntityBehavior, PhysicsTickable
         return false;
     }
 
-    private bool HandleSteppingOnBlocksSmooth(EntityPos pos, Vec3d moveDelta, float dtFac, EntityControls controls)
+    public bool HandleSteppingOnBlocksSmooth(EntityPos pos, Vec3d moveDelta, float dtFac, EntityControls controls)
     {
         if (!controls.TriesToMove || (!entity.OnGround && !entity.Swimming) || entity.Properties.Habitat == EnumHabitat.Underwater) return false;
 
         Cuboidd entityCollisionBox = entity.CollisionBox.ToDouble();
 
-        //COMMENT:
-        //How far ahead to scan for steppable blocks 
-        //TODO needs to be increased for large and fast creatures (wolves)
         double max = 0.75;
         double searchBoxLength = max + (controls.Sprint ? 0.25 : controls.Sneak ? 0.05 : 0.2);
 
@@ -720,7 +677,7 @@ public class EntityControlledPhysics : EntityBehavior, PhysicsTickable
     {
         if (steppableBox == null) return false;
 
-        double heightDiff = steppableBox.Y2 - entityCollisionBox.Y1 + 0.01 * 3f; //COMMENT: This added constant value is an ugly hack because outposition has gravity added, but has not adjusted its position to the ground floor yet
+        double heightDiff = steppableBox.Y2 - entityCollisionBox.Y1 + (0.01 * 3f);
         Vec3d stepPos = outPos.OffsetCopy(moveDelta.X, heightDiff, moveDelta.Z);
         bool canStep = !collisionTester.IsColliding(entity.World.BlockAccessor, entity.CollisionBox, stepPos, false);
 
@@ -737,7 +694,7 @@ public class EntityControlledPhysics : EntityBehavior, PhysicsTickable
     public bool TryStepSmooth(EntityControls controls, EntityPos pos, Vec2d walkVec, float dtFac, List<Cuboidd> steppableBoxes, Cuboidd entityCollisionBox)
     {
         if (steppableBoxes == null || steppableBoxes.Count == 0) return false;
-        double gravityOffset = 0.03; //COMMENT: This added constant value is an ugly hack because outposition has gravity added, but has not adjusted its position to the ground floor yet
+        double gravityOffset = 0.03;
 
         Vec2d walkVecOrtho = new Vec2d(walkVec.Y, -walkVec.X).Normalize();
 
@@ -761,11 +718,11 @@ public class EntityControlledPhysics : EntityBehavior, PhysicsTickable
                 double elevateFactor = controls.Sprint ? 0.10 : controls.Sneak ? 0.025 : 0.05;
                 if (!steppableBox.IntersectsOrTouches(entityCollisionBox))
                 {
-                    newYPos = Math.Max(newYPos, Math.Min(pos.Y + elevateFactor * dtFac, steppableBox.Y2 - entity.CollisionBox.Y1 + gravityOffset));
+                    newYPos = Math.Max(newYPos, Math.Min(pos.Y + (elevateFactor * dtFac), steppableBox.Y2 - entity.CollisionBox.Y1 + gravityOffset));
                 }
                 else
                 {
-                    newYPos = Math.Max(newYPos, pos.Y + elevateFactor * dtFac);
+                    newYPos = Math.Max(newYPos, pos.Y + (elevateFactor * dtFac));
                 }
                 foundStep = true;
             }
@@ -789,7 +746,6 @@ public class EntityControlledPhysics : EntityBehavior, PhysicsTickable
 
             if (!block.CanStep)
             {
-                //COMMENT: Blocks which are low relative to this entity (e.g. small troughs are low for the player) can still be stepped on
                 if (entity.CollisionBox.Height < 5 * block.CollisionBoxes[0].Height) continue;
             }
 
@@ -797,9 +753,6 @@ public class EntityControlledPhysics : EntityBehavior, PhysicsTickable
             EnumIntersect intersect = CollisionTester.AabbIntersect(collisionBox, entityCollisionBox, walkVector);
             if (intersect == EnumIntersect.NoIntersect) continue;
 
-            //COMMENT:
-            //Already stuck somewhere? Can't step stairs
-            //Would get stuck vertically if I go up? Can't step up either
             if ((intersect == EnumIntersect.Stuck && !block.AllowStepWhenStuck) || (intersect == EnumIntersect.IntersectY && motionY > 0))
             {
                 return null;
@@ -829,15 +782,11 @@ public class EntityControlledPhysics : EntityBehavior, PhysicsTickable
 
             if (!block.CanStep)
             {
-                //COMMENT: Blocks which are low relative to this entity (e.g. small troughs are low for the player) can still be stepped on
                 if (entity.CollisionBox.Height < 5 * block.CollisionBoxes[0].Height) continue;
             }
 
             EnumIntersect intersect = CollisionTester.AabbIntersect(collisionbox, entityCollisionBox, walkVector);
 
-            //COMMENT:
-            //Already stuck somewhere? Can't step stairs
-            //Would get stuck vertically if I go up? Can't step up either
             if ((intersect == EnumIntersect.Stuck && !block.AllowStepWhenStuck) || (intersect == EnumIntersect.IntersectY && motionY > 0))
             {
                 return null;
@@ -863,7 +812,7 @@ public class EntityControlledPhysics : EntityBehavior, PhysicsTickable
         Cuboidd entityBox = entityBoxRel.ToDouble().Translate(pos);
 
         int minX = (int)(entityBoxRel.MinX + pos.X);
-        int minY = (int)(entityBoxRel.MinY + pos.Y - 1); //-1 for the extra high collision box of fences
+        int minY = (int)(entityBoxRel.MinY + pos.Y - 1); // -1 for the extra high collision box of fences.
         int minZ = (int)(entityBoxRel.MinZ + pos.Z);
         int maxX = (int)Math.Ceiling(entityBoxRel.MaxX + pos.X);
         int maxY = (int)Math.Ceiling(entityBoxRel.MaxY + pos.Y);
@@ -897,5 +846,86 @@ public class EntityControlledPhysics : EntityBehavior, PhysicsTickable
         return blocks.Count > 0;
     }
 
-    #endregion
+    public override string PropertyName()
+    {
+        return "entitycontrolledphysics";
+    }
+
+    public ref int FlagTickDone { get => ref serverPhysicsTickDone; }
+    public volatile int serverPhysicsTickDone;
+    public override void OnEntityDespawn(EntityDespawnData despawn)
+    {
+        if (sapi != null) NIM.RemovePhysicsTickable(entity.Api, this);
+    }
+
+    /// <summary>
+    /// For adjusting hitbox to dying enemies.
+    /// </summary>
+    public Matrixf tmpModelMat = new();
+    public void AdjustCollisionBoxToAnimation(float dtFac)
+    {
+        AttachmentPointAndPose apap = entity.AnimManager.Animator?.GetAttachmentPointPose("Center");
+
+        if (apap == null) return;
+
+        float[] hitboxOff = new float[4] { 0, 0, 0, 1 };
+        AttachmentPoint ap = apap.AttachPoint;
+
+        float rotX = entity.Properties.Client.Shape != null ? entity.Properties.Client.Shape.rotateX : 0;
+        float rotY = entity.Properties.Client.Shape != null ? entity.Properties.Client.Shape.rotateY : 0;
+        float rotZ = entity.Properties.Client.Shape != null ? entity.Properties.Client.Shape.rotateZ : 0;
+
+        float[] ModelMat = Mat4f.Create();
+        Mat4f.Identity(ModelMat);
+        Mat4f.Translate(ModelMat, ModelMat, 0, entity.CollisionBox.Y2 / 2, 0);
+
+        double[] quat = Quaterniond.Create();
+        Quaterniond.RotateX(quat, quat, entity.SidedPos.Pitch + (rotX * GameMath.DEG2RAD));
+        Quaterniond.RotateY(quat, quat, entity.SidedPos.Yaw + ((rotY + 90) * GameMath.DEG2RAD));
+        Quaterniond.RotateZ(quat, quat, entity.SidedPos.Roll + (rotZ * GameMath.DEG2RAD));
+
+        float[] qf = new float[quat.Length];
+        for (int k = 0; k < quat.Length; k++) qf[k] = (float)quat[k];
+        Mat4f.Mul(ModelMat, ModelMat, Mat4f.FromQuat(Mat4f.Create(), qf));
+
+        float scale = entity.Properties.Client.Size;
+
+        Mat4f.Translate(ModelMat, ModelMat, 0, -entity.CollisionBox.Y2 / 2, 0f);
+        Mat4f.Scale(ModelMat, ModelMat, new float[] { scale, scale, scale });
+        Mat4f.Translate(ModelMat, ModelMat, -0.5f, 0, -0.5f);
+
+        tmpModelMat.Set(ModelMat)
+                    .Mul(apap.AnimModelMatrix)
+                    .Translate(ap.PosX / 16f, ap.PosY / 16f, ap.PosZ / 16f);
+
+        EntityPos entityPos = entity.SidedPos;
+
+        float[] endVec = Mat4f.MulWithVec4(tmpModelMat.Values, hitboxOff);
+
+        float motionX = endVec[0] - (entity.CollisionBox.X1 - entity.OriginCollisionBox.X1);
+        float motionZ = endVec[2] - (entity.CollisionBox.Z1 - entity.OriginCollisionBox.Z1);
+
+        if (Math.Abs(motionX) > 0.00001 || Math.Abs(motionZ) > 0.00001)
+        {
+            EntityPos posMoved = entityPos.Copy();
+            posMoved.Motion.X = motionX;
+            posMoved.Motion.Z = motionZ;
+
+            moveDelta.Set(posMoved.Motion.X, posMoved.Motion.Y, posMoved.Motion.Z);
+
+            collisionTester.ApplyTerrainCollision(entity, posMoved, dtFac, ref outPos);
+
+            double reflectX = ((outPos.X - entityPos.X) / dtFac) - motionX;
+            double reflectZ = ((outPos.Z - entityPos.Z) / dtFac) - motionZ;
+
+            entityPos.Motion.X = reflectX;
+            entityPos.Motion.Z = reflectZ;
+
+            entity.CollisionBox.Set(entity.OriginCollisionBox);
+            entity.CollisionBox.Translate(endVec[0], 0, endVec[2]);
+
+            entity.SelectionBox.Set(entity.OriginSelectionBox);
+            entity.SelectionBox.Translate(endVec[0], 0, endVec[2]);
+        }
+    }
 }

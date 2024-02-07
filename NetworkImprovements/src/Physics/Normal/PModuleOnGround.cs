@@ -7,13 +7,16 @@ using Vintagestory.API.MathTools;
 
 public class PModuleOnGround : PModule
 {
-    public long lastJump; //Time the player last jumped
+    // Time the player last jumped.
+    public long lastJump;
 
-    public double groundDragFactor = 0.3f; //Factor motion will be slowed by the ground
+    // Factor motion will be slowed by the ground.
+    public double groundDragFactor = 0.3f;
 
     public float accum;
 
-    public float coyoteTimer; //Time the player can walk off an edge before gravity applies
+    // Time the player can walk off an edge before gravity applies.
+    public float coyoteTimer;
 
     public Vec3d motionDelta = new();
 
@@ -31,18 +34,15 @@ public class PModuleOnGround : PModule
         return onGround || coyoteTimer > 0;
     }
 
-    /// <summary>
-    /// Applies every physics tick (50ms)
-    /// </summary>
     public override void DoApply(float dt, Entity entity, EntityPos pos, EntityControls controls)
     {
-        coyoteTimer -= dt; //Tick coyote time
+        // Tick coyote time.
+        coyoteTimer -= dt;
 
-        Block belowBlock = entity.World.BlockAccessor.GetBlock((int)pos.X, (int)(pos.Y - 0.05f), (int)pos.Z); //Get block below the player
+        // Get block below.
+        Block belowBlock = entity.World.BlockAccessor.GetBlock((int)pos.X, (int)(pos.Y - 0.05f), (int)pos.Z);
 
-        //Physics are applied at fixed ticks now
-        //But accumulator for this stays since it's only here
-
+        // Only accumulator in physics modules.
         accum = Math.Min(1, accum + dt);
         float frameTime = 1 / 60f;
 
@@ -52,32 +52,38 @@ public class PModuleOnGround : PModule
 
             if (entity.Alive)
             {
-                // pply walk motion
+                // Move by current walk vector (set in AI and by player).
                 double multiplier = (entity as EntityAgent).GetWalkSpeedMultiplier(groundDragFactor);
 
-                motionDelta.Set(    motionDelta.X + (controls.WalkVector.X * multiplier - motionDelta.X) * belowBlock.DragMultiplier,
-                                    0,
-                                    motionDelta.Z + (controls.WalkVector.Z * multiplier - motionDelta.Z) * belowBlock.DragMultiplier);
+                motionDelta.Set(motionDelta.X + (((controls.WalkVector.X * multiplier) - motionDelta.X) * belowBlock.DragMultiplier),
+                                0,
+                                motionDelta.Z + (((controls.WalkVector.Z * multiplier) - motionDelta.Z) * belowBlock.DragMultiplier));
 
-                pos.Motion.Add(motionDelta.X, 0, motionDelta.Z);
+                if (entity.OnGround)
+                {
+                    pos.Motion.Add(motionDelta.X, 0, motionDelta.Z);
+                }
             }
 
-            //Apply ground drag
-            double dragStrength = 1 - groundDragFactor;
+            // Apply ground drag.
+            if (entity.OnGround)
+            {
+                double dragStrength = 1 - groundDragFactor;
 
-            pos.Motion.X *= dragStrength;
-            pos.Motion.Z *= dragStrength;
+                pos.Motion.X *= dragStrength;
+                pos.Motion.Z *= dragStrength;
+            }
         }
 
-        //Only able to jump every 500ms. Only works while on the ground
+        // Only able to jump every 500ms. Only works while on the ground.
         if (controls.Jump && entity.World.ElapsedMilliseconds - lastJump > 500 && entity.Alive)
         {
             lastJump = entity.World.ElapsedMilliseconds;
 
-            //Set jump motion to something
+            // Set jump motion to something.
             pos.Motion.Y = GlobalConstants.BaseJumpForce * 1 / 60f;
 
-            //Play jump sound
+            // Play jump sound.
             EntityPlayer entityPlayer = entity as EntityPlayer;
             IPlayer player = entityPlayer?.World.PlayerByUid(entityPlayer.PlayerUID);
             entity.PlayEntitySound("jump", player, false);

@@ -1,9 +1,0 @@
-[
-  {
-    "op": "replace",
-    "path": "/client/behaviors/1/code",
-    "value": "EntityInterpolation",
-    "file": "game:entities/arrow",
-    "side": "Universal"
-  }
-]

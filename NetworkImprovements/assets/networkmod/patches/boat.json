@@ -1,0 +1,16 @@
+[
+  {
+    "op": "replace",
+    "path": "/client/behaviors/0/code",
+    "value": "legacypassivephysics",
+    "file": "game:entities/water/boat/boat.json",
+    "side": "Universal"
+  },
+  {
+    "op": "replace",
+    "path": "/server/behaviors/0/code",
+    "value": "legacypassivephysics",
+    "file": "game:entities/water/boat/boat.json",
+    "side": "Universal"
+  }
+]
