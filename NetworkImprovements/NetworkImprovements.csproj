@@ -16,7 +16,7 @@
 
   <ItemGroup>
     <Reference Include="SkiaSharp">
-      <HintPath>..\..\Users\Rajeesh\AppData\Roaming\Vintagestory\Lib\SkiaSharp.dll</HintPath>
+      <HintPath>$(VINTAGE_STORY)/Lib/SkiaSharp.dll</HintPath>
       <Private>False</Private>
     </Reference>
     <Reference Include="VintagestoryAPI">
