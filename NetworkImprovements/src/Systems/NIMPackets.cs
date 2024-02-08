@@ -217,9 +217,14 @@ public class MinPositionPacket
 
         EntityPos pPos = entity.PreviousServerPos;
 
-        if (pos.X != pPos.X) x = pos.X;
-        if (pos.Y != pPos.Y) y = pos.Y;
-        if (pos.Z != pPos.Z) z = pos.Z;
+        //if (pos.X != pPos.X) x = pos.X;
+        x = pos.X;
+
+        //if (pos.Y != pPos.Y) y = pos.Y;
+        y = pos.Y;
+
+        //if (pos.Z != pPos.Z) z = pos.Z;
+        z = pos.Z;
 
         if (pos.Yaw != pPos.Yaw) yaw = pos.Yaw;
         if (pos.Pitch != pPos.Pitch) pitch = pos.Pitch;

@@ -1,6 +1,9 @@
 ﻿using HarmonyLib;
+using System;
+using Vintagestory.API.Client;
 using Vintagestory.API.Common;
 using Vintagestory.API.Common.Entities;
+using Vintagestory.API.Config;
 using Vintagestory.API.MathTools;
 using Vintagestory.API.Util;
 using Vintagestory.Client.NoObf;
@@ -15,6 +18,158 @@ using Vintagestory.GameContent;
 // ADD CLASS TO STONES.
 public class Patches
 {
+    [HarmonyPatch(typeof(EntityBoat), "OnRenderFrame")]
+    public static class BoatFix1
+    {
+        [HarmonyPrefix]
+        public static bool Prefix(EntityBoat __instance, float dt, EnumRenderStage stage)
+        {
+            ICoreClientAPI capi = __instance.Api as ICoreClientAPI;
+
+            if (capi.IsGamePaused)
+            {
+                return false;
+            }
+
+            __instance.CallMethod("updateBoatAngleAndMotion", dt);
+
+            long ellapsedMs = capi.InWorldEllapsedMilliseconds;
+
+            if (__instance.Swimming)
+            {
+                float intensity = 0.15f + GlobalConstants.CurrentWindSpeedClient.X * 0.9f;
+                float diff = GameMath.DEG2RAD / 2f * intensity;
+                __instance.xangle = GameMath.Sin((float)(ellapsedMs / 1000.0 * 2)) * 8 * diff;
+                __instance.yangle = GameMath.Cos((float)(ellapsedMs / 2000.0 * 2)) * 3 * diff;
+                __instance.zangle = -GameMath.Sin((float)(ellapsedMs / 3000.0 * 2)) * 8 * diff - (float)__instance.AngularVelocity * 5 * Math.Sign(__instance.ForwardSpeed);
+
+                // SidedPos.Pitch = (float)ForwardSpeed * 1.3f;
+            }
+
+            EntityShapeRenderer esr = __instance.Properties.Client.Renderer as EntityShapeRenderer;
+            if (esr == null) return false;
+
+            esr.xangle = __instance.xangle;
+            esr.yangle = __instance.yangle;
+            esr.zangle = __instance.zangle;
+
+            bool selfSitting = false;
+
+            foreach (EntityBoatSeat seat in __instance.Seats)
+            {
+                selfSitting |= seat.Passenger == capi.World.Player.Entity;
+                if (seat.Passenger?.Properties?.Client.Renderer is EntityShapeRenderer pesr)
+                {
+                    pesr.xangle = __instance.xangle;
+                    pesr.yangle = __instance.yangle;
+                    pesr.zangle = __instance.zangle;
+                }
+            }
+
+            // Not omitted just too lazy to use reflection.
+            /*
+            if (selfSitting)
+            {
+                modsysSounds.NowInMotion((float)Pos.Motion.Length());
+            }
+            else
+            {
+                modsysSounds.NotMounted();
+            }
+            */
+
+            return false;
+        }
+    }
+
+    [HarmonyPatch(typeof(EntityBoat), "updateBoatAngleAndMotion")]
+    public static class BoatFix2
+    {
+        [HarmonyPrefix]
+        public static bool Prefix(EntityBoat __instance, float dt)
+        {
+            if (!__instance.Swimming)
+            {
+                return false;
+            }
+
+            // Ignore lag spikes.
+            dt = Math.Min(0.5f, dt);
+
+            float step = GlobalConstants.PhysicsFrameTime;
+            Vec2d motion = __instance.SeatsToMotion(step);
+
+            // Add some easing to it.
+            __instance.ForwardSpeed += (motion.X * __instance.SpeedMultiplier - __instance.ForwardSpeed) * dt;
+            __instance.AngularVelocity += (motion.Y * __instance.SpeedMultiplier - __instance.AngularVelocity) * dt;
+
+            EntityPos pos = __instance.SidedPos;
+
+            if (__instance.ForwardSpeed != 0.0)
+            {
+                Vec3d targetMotion = pos.GetViewVector().Mul((float)-__instance.ForwardSpeed).ToVec3d();
+                pos.Motion.X = targetMotion.X;
+                pos.Motion.Z = targetMotion.Z;
+            }
+
+            if (__instance.AngularVelocity != 0.0 && __instance.Api.Side == EnumAppSide.Server)
+            {
+                pos.Yaw += (float)__instance.AngularVelocity * dt * 30f;
+            }
+
+            return false;
+        }
+    }
+
+    // Previous pos is the 2nd to last received server pos and interpolation causes the position to be slightly behind that actually. This produces a jerky movement and needs to be changed now.
+    [HarmonyPatch(typeof(EntityBlockFallingRenderer), "RenderFallingBlockEntity")]
+    public static class TestFix
+    {
+        [HarmonyPrefix]
+        public static bool Prefix(EntityBlockFallingRenderer __instance)
+        {
+            ICoreClientAPI capi = __instance.capi;
+            IRenderAPI rapi = capi.Render;
+
+            rapi.GlDisableCullFace();
+
+            rapi.GlToggleBlend(true, EnumBlendMode.Standard);
+
+            double alpha = __instance.GetField<double>("accum") / GlobalConstants.PhysicsFrameTime;
+            double rotaccum = __instance.GetField<double>("rotaccum");
+
+            float div = __instance.entity.Collided ? 4f : 1.5f;
+
+            Vec3d prevPos = __instance.GetField<Vec3d>("curPos");
+            Vec3d curPos = __instance.GetField<Vec3d>("curPos");
+
+            IStandardShaderProgram prog = rapi.PreparedStandardShader((int)__instance.entity.Pos.X, (int)(__instance.entity.Pos.Y + 0.2), (int)__instance.entity.Pos.Z);
+            Vec3d camPos = capi.World.Player.Entity.CameraPos;
+            prog.Tex2D = __instance.GetField<int>("atlasTextureId");
+
+
+            prog.ModelMatrix = __instance.GetField<Matrixf>("ModelMat")
+                .Identity()
+                .Translate(
+                    prevPos.X * (1 - alpha) + curPos.X * alpha - camPos.X + GameMath.Sin(capi.InWorldEllapsedMilliseconds / 120f + 30) / 20f / div,
+                    prevPos.Y * (1 - alpha) + curPos.Y * alpha - camPos.Y,
+                    prevPos.Z * (1 - alpha) + curPos.Z * alpha - camPos.Z + GameMath.Cos(capi.InWorldEllapsedMilliseconds / 110f + 20) / 20f / div
+                )
+                .RotateX((float)(Math.Sin(rotaccum * 10) / 10.0 / div))
+                .RotateZ((float)(Math.Cos(10 + rotaccum * 9.0) / 10.0 / div))
+               .Values
+            ;
+
+            prog.ViewMatrix = rapi.CameraMatrixOriginf;
+            prog.ProjectionMatrix = rapi.CurrentProjectionMatrix;
+
+            rapi.RenderMesh(__instance.GetField<MeshRef>("meshRef"));
+            prog.Stop();
+
+            return false;
+        }
+    }
+
     // The new position should only be set on the client receiving it. This breaks interpolation otherwise.
     // For teleporting.
     [HarmonyPatch(typeof(Entity), "OnReceivedServerPacket")]

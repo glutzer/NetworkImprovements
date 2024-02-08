@@ -4,6 +4,7 @@ using System.Linq;
 using System.Net;
 using System.Net.Sockets;
 using System.Text.RegularExpressions;
+using System.Threading;
 using System.Threading.Tasks;
 using Vintagestory.API.Client;
 using Vintagestory.API.Common;
@@ -109,21 +110,19 @@ public class UDPNetwork
 
     public void ListenClient()
     {
-        udpClient.BeginReceive(new AsyncCallback(ClientReceiveCallback), null);
-    }
+        byte[] dataBuffer;
 
-    public void ClientReceiveCallback(IAsyncResult ar)
-    {
-        UdpReceiveResult dataBuffer;
+        Task task = new(() =>
+        {
+            IPEndPoint endPoint = new(0, 0);
 
-        Task.Factory.StartNew(async () => {
             try
             {
                 while (true)
                 {
-                    dataBuffer = await udpClient.ReceiveAsync();
+                    dataBuffer = udpClient.Receive(ref endPoint);
 
-                    UDPPacket packet = SerializerUtil.Deserialize<UDPPacket>(dataBuffer.Buffer);
+                    UDPPacket packet = SerializerUtil.Deserialize<UDPPacket>(dataBuffer);
 
                     if (packet != null)
                     {
@@ -139,28 +138,38 @@ public class UDPNetwork
 
             }
         });
+
+        Thread thread = new(task.Start)
+        {
+            Priority = ThreadPriority.Normal
+        };
+
+        thread.Start();
     }
 
     public void ListenServer()
     {
-        UdpReceiveResult dataBuffer;
+        byte[] dataBuffer;
 
-        Task.Factory.StartNew(async () => {
+        Task task = new(() =>
+        {
+            IPEndPoint endPoint = new(0, 0);
+
             try
             {
                 while (true)
                 {
-                    dataBuffer = await udpClient.ReceiveAsync();
+                    dataBuffer = udpClient.Receive(ref endPoint);
 
-                    UDPPacket packet = SerializerUtil.Deserialize<UDPPacket>(dataBuffer.Buffer);
+                    UDPPacket packet = SerializerUtil.Deserialize<UDPPacket>(dataBuffer);
 
                     if (packet?.id == 0)
                     {
-                        HandleConnectionRequest(packet.data, new IPEndPoint(dataBuffer.RemoteEndPoint.Address.Address, dataBuffer.RemoteEndPoint.Port));
+                        HandleConnectionRequest(packet.data, new IPEndPoint(endPoint.Address.Address, endPoint.Port));
                     }
                     else
                     {
-                        IServerPlayer sp = endPoints.Get(dataBuffer.RemoteEndPoint);
+                        IServerPlayer sp = endPoints.Get(endPoint);
                         if (sp != null && packet != null)
                         {
                             packet.player = sp;
@@ -178,6 +187,13 @@ public class UDPNetwork
 
             }
         });
+
+        Thread thread = new(task.Start)
+        {
+            Priority = ThreadPriority.Normal
+        };
+
+        thread.Start();
     }
 
     // PROCESS PACKETS EVERY TICK.
@@ -220,13 +236,6 @@ public class UDPNetwork
                 EntityPos pos = entity.ServerPos;
 
                 // Tick info.
-                /*
-                int lastTick = entity.WatchedAttributes.GetInt("lastTick", 0);
-                if (packet.tick < lastTick) continue;
-                if (lastTick == 0) lastTick = packet.tick - 1;
-                entity.WatchedAttributes.SetInt("tickDiff", packet.tick - lastTick);
-                entity.WatchedAttributes.SetInt("lastTick", packet.tick);
-                */
 
                 entity.WatchedAttributes.SetBool("lr", packet.lowRes);
 
@@ -267,13 +276,6 @@ public class UDPNetwork
                 EntityPos pos = entity.ServerPos;
 
                 // Tick info.
-                /*
-                int lastTick = entity.WatchedAttributes.GetInt("lastTick", 0);
-                if (packet.tick < lastTick) continue;
-                if (lastTick == 0) lastTick = packet.tick - 1;
-                entity.WatchedAttributes.SetInt("tickDiff", packet.tick - lastTick);
-                entity.WatchedAttributes.SetInt("lastTick", packet.tick);
-                */
 
                 entity.WatchedAttributes.SetBool("lr", packet.lowRes);
 
@@ -341,13 +343,7 @@ public class UDPNetwork
         int version = entity.WatchedAttributes.GetInt("positionVersionNumber");
         if (packet.positionVersion < version) return;
 
-        // Check tick.
-        /*
-        int tick = entity.WatchedAttributes.GetInt("ct");
-        if (tick > packet.tick) return;
-        entity.WatchedAttributes.SetInt("ct", packet.tick);
-        int tickDiff = packet.tick - tick;
-        */
+        // Tick info.
 
         serverPlayer.LastReceivedClientPosition = server.ElapsedMilliseconds;
 

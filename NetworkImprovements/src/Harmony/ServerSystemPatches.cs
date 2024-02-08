@@ -69,7 +69,7 @@ public class ServerSystemPatches
         [HarmonyPrefix]
         public static bool Prefix(ServerSystemEntitySimulation __instance)
         {
-            __instance.CallMethod("VerifyPlayerPositions");
+            //__instance.CallMethod("VerifyPlayerPositions"); Not needed now, done properly.
             return false;
         }
     }
