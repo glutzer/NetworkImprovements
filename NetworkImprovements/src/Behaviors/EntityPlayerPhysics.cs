@@ -15,7 +15,6 @@ public class EntityPlayerPhysics : EntityControlledPhysics, IRenderer
     public IPlayer player;
     public ServerPlayer serverPlayer;
     public EntityPlayer entityPlayer;
-    public long lastReceivedPosition;
     public int posVersion = 0;
 
     public ClientMain clientMain;
@@ -43,11 +42,6 @@ public class EntityPlayerPhysics : EntityControlledPhysics, IRenderer
             // Remote on server. First render frame on client checks if it's a local player.
             remote = false;
         }
-        else
-        {
-            // Can be removed if interval is sent in player position packet.
-            lastReceivedPosition = sapi.World.ElapsedMilliseconds;
-        }
 
         stepHeight = attributes["stepHeight"].AsFloat(0.6f);
         sneakTestCollisionbox = entity.CollisionBox.Clone().OmniNotDownGrowBy(-0.1f);
@@ -67,6 +61,12 @@ public class EntityPlayerPhysics : EntityControlledPhysics, IRenderer
         for (int i = 0; i < physicsModules.Count; i++)
         {
             physicsModules[i].Initialize(physics, entity);
+        }
+
+        if (remote)
+        {
+            EnumHandling handling = EnumHandling.Handled;
+            OnReceivedServerPos(true, ref handling);
         }
 
         entity.PhysicsUpdateWatcher?.Invoke(0, entity.SidedPos.XYZ);
@@ -424,7 +424,6 @@ public class EntityPlayerPhysics : EntityControlledPhysics, IRenderer
                 }
             }
 
-            // This should be in here right?
             AfterPhysicsTick(interval);
         }
 

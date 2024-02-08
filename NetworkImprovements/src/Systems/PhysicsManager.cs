@@ -66,7 +66,7 @@ public class PhysicsManager : LoadBalancedTask
 
     private CachingConcurrentDictionary<long, Entity> loadedEntities;
 
-    private List<Entity> entitiesPositionMinimalUpdateLowRes = new();
+    public List<Entity> entitiesPositionMinimalUpdateLowRes = new();
 
     public void GrabFields()
     {
@@ -118,11 +118,6 @@ public class PhysicsManager : LoadBalancedTask
         bool forceUpdate = false;
         bool lowResUpdate = false;
 
-        if (tick % 45 == 0)
-        {
-            PartitionEntities();
-        }
-
         if (tick % 15 == 0)
         {
             forceUpdate = true;
@@ -161,9 +156,6 @@ public class PhysicsManager : LoadBalancedTask
                     }
                     else if (lowResUpdate)
                     {
-                        // Always send y to avoid floating entities.
-                        // Only when an entity is in low-res range and in low-res tick.
-                        entity.PreviousServerPos.Y = 0;
                         entitiesPositionMinimalUpdateLowRes.Add(entity);
                     }
                 }
@@ -264,6 +256,11 @@ public class PhysicsManager : LoadBalancedTask
             if (entity.AnimManager != null) entity.AnimManager.AnimationsDirty = false;
 
             entity.IsTeleport = false;
+        }
+
+        if (tick % 45 == 0)
+        {
+            PartitionEntities();
         }
     }
 
@@ -434,6 +431,8 @@ public class PhysicsManager : LoadBalancedTask
 
     public void DoServerTick()
     {
+        // Send spawns every tick?
+
         currentTick++;
         if (currentTick % 6 == 0)
         {

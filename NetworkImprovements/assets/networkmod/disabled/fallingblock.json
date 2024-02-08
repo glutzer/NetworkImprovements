@@ -8,15 +8,15 @@
   },
   {
     "op": "replace",
-    "path": "/client/behaviors/1/code",
-    "value": "legacyinterpolateposition",
+    "path": "/server/behaviors/0/code",
+    "value": "legacypassivephysics",
     "file": "game:entities/fallingblock.json",
     "side": "Universal"
   },
   {
     "op": "replace",
-    "path": "/server/behaviors/0/code",
-    "value": "legacypassivephysics",
+    "path": "/client/behaviors/1/code",
+    "value": "legacyinterpolateposition",
     "file": "game:entities/fallingblock.json",
     "side": "Universal"
   }

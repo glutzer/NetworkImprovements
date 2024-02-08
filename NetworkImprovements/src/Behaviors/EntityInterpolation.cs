@@ -6,6 +6,8 @@ using Vintagestory.API.Common;
 using Vintagestory.API.Common.Entities;
 using Vintagestory.API.Datastructures;
 using Vintagestory.API.MathTools;
+using Vintagestory.Client.NoObf;
+using Vintagestory.GameContent;
 
 public struct PositionSnapshot
 {
@@ -237,7 +239,7 @@ public class EntityInterpolation : EntityBehavior, IRenderer
             {
                 if (seat.MountedBy == capi.World.Player.Entity)
                 {
-                    return;
+                    //return;
                 }
                 else
                 {
@@ -263,7 +265,7 @@ public class EntityInterpolation : EntityBehavior, IRenderer
     {
         float pDiff = Math.Abs(GameMath.AngleRadDistance(current, target)) * dt / 0.1f;
         int signY = Math.Sign(pDiff);
-        current += 0.5f * Math.Clamp(GameMath.AngleRadDistance(current, target), -signY * pDiff, signY * pDiff);
+        current += 0.6f * Math.Clamp(GameMath.AngleRadDistance(current, target), -signY * pDiff, signY * pDiff);
         current %= GameMath.TWOPI;
         return current;
     }
