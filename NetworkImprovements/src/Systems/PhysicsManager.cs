@@ -53,6 +53,8 @@ public class PhysicsManager : LoadBalancedTask
         es = server.GetField<ServerSystem[]>("Systems")[6] as ServerSystemEntitySimulation;
 
         GrabFields();
+
+        rateModifier = 1;
     }
 
     private List<KeyValuePair<Entity, EntityDespawnData>> entitiesNowOutOfRange;
@@ -143,6 +145,7 @@ public class PhysicsManager : LoadBalancedTask
                 if (entity is EntityPlayer || entity == null) continue;
 
                 EntityAgent entityAgent = entity as EntityAgent;
+
                 if ((entity.AnimManager != null && entity.AnimManager.AnimationsDirty) || entity.IsTeleport)
                 {
                     entitiesPositionUpdate.Add(entity);
@@ -428,10 +431,13 @@ public class PhysicsManager : LoadBalancedTask
     }
 
     public int currentTick;
+    public static float rateModifier = 1;
 
     public void DoServerTick()
     {
         // Send spawns every tick?
+
+        float adjustedRate = tickInterval * rateModifier;
 
         currentTick++;
         if (currentTick % 6 == 0)
@@ -454,7 +460,7 @@ public class PhysicsManager : LoadBalancedTask
 
             try
             {
-                tickable.AfterPhysicsTick(tickInterval);
+                tickable.AfterPhysicsTick(adjustedRate);
             }
             catch (Exception e)
             {
@@ -465,11 +471,13 @@ public class PhysicsManager : LoadBalancedTask
 
     public void DoWork()
     {
+        float adjustedRate = tickInterval * rateModifier;
+
         foreach (IPhysicsTickable tickable in tickables)
         {
             if (AsyncHelper.CanProceedOnThisThread(ref tickable.FlagTickDone))
             {
-                tickable.OnPhysicsTick(tickInterval);
+                tickable.OnPhysicsTick(adjustedRate);
             }
         }
     }
