@@ -6,8 +6,6 @@ using Vintagestory.API.Common;
 using Vintagestory.API.Common.Entities;
 using Vintagestory.API.Datastructures;
 using Vintagestory.API.MathTools;
-using Vintagestory.Client.NoObf;
-using Vintagestory.GameContent;
 
 public struct PositionSnapshot
 {
@@ -33,11 +31,6 @@ public struct PositionSnapshot
         this.z = z;
 
         this.interval = interval;
-    }
-
-    public readonly PositionSnapshot Clone()
-    {
-        return new PositionSnapshot(x, y, z, interval);
     }
 }
 
@@ -211,7 +204,15 @@ public class EntityInterpolation : EntityBehavior, IRenderer
         {
             if (queueCount > 0)
             {
-                PopQueue(false);
+                if (queueCount > 20)
+                {
+                    PopQueue(true);
+                }
+                else
+                {
+                    PopQueue(false);
+                }
+
                 wait = 0;
             }
             else
@@ -219,11 +220,6 @@ public class EntityInterpolation : EntityBehavior, IRenderer
                 wait = 1;
                 break;
             }
-        }
-
-        if (queueCount > 20)
-        {
-            PopQueue(true);
         }
 
         float speed = (queueCount * 0.2f) + 0.8f;
