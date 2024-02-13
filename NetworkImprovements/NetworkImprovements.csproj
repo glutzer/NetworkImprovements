@@ -65,16 +65,17 @@
   <Content Include="assets\**">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
   </Content>
-  <None Remove="assets\networkmod\patches\bear.json" />
-  <None Remove="assets\networkmod\patches\boat.json" />
-  <None Remove="assets\networkmod\patches\player.json" />
+  <Compile Remove="assets\networkmod\patches\**" />
+  <Content Remove="assets\networkmod\patches\**" />
+  <EmbeddedResource Remove="assets\networkmod\patches\**" />
+  <None Remove="assets\networkmod\patches\**" />
   <Content Include="modinfo.json">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
   </Content>
 </ItemGroup>
 
 <ItemGroup>
-  <Folder Include="assets\networkmod\patches\" />
+  <Folder Include="assets\networkmod\" />
 </ItemGroup>
 
 </Project>

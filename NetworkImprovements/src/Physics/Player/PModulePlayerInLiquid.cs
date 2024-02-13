@@ -3,12 +3,12 @@ using Vintagestory.API.Common;
 using Vintagestory.API.Common.Entities;
 using Vintagestory.API.MathTools;
 
-public class PlayerInLiquid : PModuleInLiquid
+public class PModulePlayerInLiquid : PModuleInLiquid
 {
     public IPlayer player;
 
     // Stores player attached.
-    public PlayerInLiquid(EntityPlayer entityPlayer)
+    public PModulePlayerInLiquid(EntityPlayer entityPlayer)
     {
         player = entityPlayer.World.PlayerByUid(entityPlayer.PlayerUID);
     }
@@ -48,7 +48,7 @@ public class PlayerInLiquid : PModuleInLiquid
             yMotion = controls.FlyVector.Y * (1 + push) * 0.03f * swimLineSubmergedness;
         }
 
-        pos.Motion.Add(controls.FlyVector.X * (1 + push) * 0.03f,
+        pos.Motion.Add( controls.FlyVector.X * (1 + push) * 0.03f,
                         yMotion,
                         controls.FlyVector.Z * (1 + push) * 0.03f);
     }

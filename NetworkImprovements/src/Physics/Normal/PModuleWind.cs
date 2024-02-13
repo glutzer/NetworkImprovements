@@ -23,7 +23,7 @@ public class PModuleWind : PModule
 
     public override void DoApply(float dt, Entity entity, EntityPos pos, EntityControls controls)
     {
-        // Update wind force every second and apply the motion to the entity.
+        // Update wind force every 5 seconds and apply the motion to the entity.
         accum += dt;
         if (accum > 5)
         {

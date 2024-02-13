@@ -12,7 +12,7 @@ public class PlayerInAir : PModuleInAir
     {
         base.Initialize(config, entity);
 
-        // Player has a much harder time moving while falling
+        // Player has a much harder time moving while falling.
         airMovingStrengthFalling = airMovingStrength / 4;
     }
 
@@ -55,9 +55,9 @@ public class PlayerInAir : PModuleInAir
             double glideSpeed = GameMath.Clamp(controls.GlideSpeed, 0.005f, 0.2f);
              
             // Calculate glide vector and add it to the motion.
-            pos.Motion.Add(-cosPitch * sinYaw * glideSpeed,
-                            sinPitch * glideSpeed,
-                            cosPitch * cosYaw * glideSpeed);
+            pos.Motion.Add(     -cosPitch * sinYaw * glideSpeed,
+                                sinPitch * glideSpeed,
+                                cosPitch * cosYaw * glideSpeed);
 
             pos.Motion.Mul(GameMath.Clamp(1 - (pos.Motion.Length() * 0.13f), 0, 1));
         }

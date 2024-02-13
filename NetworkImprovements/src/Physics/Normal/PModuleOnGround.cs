@@ -55,9 +55,9 @@ public class PModuleOnGround : PModule
                 // Move by current walk vector (set in AI and by player).
                 double multiplier = (entity as EntityAgent).GetWalkSpeedMultiplier(groundDragFactor);
 
-                motionDelta.Set(motionDelta.X + (((controls.WalkVector.X * multiplier) - motionDelta.X) * belowBlock.DragMultiplier),
-                                0,
-                                motionDelta.Z + (((controls.WalkVector.Z * multiplier) - motionDelta.Z) * belowBlock.DragMultiplier));
+                motionDelta.Set(    motionDelta.X + (((controls.WalkVector.X * multiplier) - motionDelta.X) * belowBlock.DragMultiplier),
+                                    0,
+                                    motionDelta.Z + (((controls.WalkVector.Z * multiplier) - motionDelta.Z) * belowBlock.DragMultiplier));
 
                 if (entity.OnGround)
                 {

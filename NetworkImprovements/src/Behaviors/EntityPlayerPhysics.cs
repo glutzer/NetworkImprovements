@@ -76,8 +76,8 @@ public class EntityPlayerPhysics : EntityControlledPhysics, IRenderer
     {
         physicsModules.Add(new PModuleWind());
         physicsModules.Add(new PModuleOnGround());
-        physicsModules.Add(new PlayerInLiquid(entityPlayer));
-        physicsModules.Add(new PlayerInAir());
+        physicsModules.Add(new PModulePlayerInLiquid(entityPlayer));
+        physicsModules.Add(new PModulePlayerInAir());
         physicsModules.Add(new PModuleGravity());
         physicsModules.Add(new PModuleMotionDrag());
         physicsModules.Add(new PModuleKnockback());

@@ -20,7 +20,7 @@ public class PhysicsManager : LoadBalancedTask
 
     public ICoreServerAPI sapi;
     public UDPNetwork udpNetwork;
-    public NIM system;
+    public NIM nimSystem;
 
     public ServerMain server;
     public LoadBalancer loadBalancer;
@@ -39,7 +39,7 @@ public class PhysicsManager : LoadBalancedTask
     {
         this.sapi = sapi;
         this.udpNetwork = udpNetwork;
-        this.system = system;
+        this.nimSystem = system;
 
         int threadCount = Math.Min(8, MagicNum.MaxPhysicsThreads);
 
@@ -57,16 +57,17 @@ public class PhysicsManager : LoadBalancedTask
         rateModifier = 1;
     }
 
-    private List<KeyValuePair<Entity, EntityDespawnData>> entitiesNowOutOfRange;
-    private List<Entity> entitiesNowInRange;
-    private List<Entity> entitiesFullUpdate;
-    private List<Entity> entitiesPartialUpdate;
-    private List<Entity> entitiesPositionUpdate;
-    private List<Entity> entitiesPositionMinimalUpdate;
-    private List<Entity> entitiesFullDebugUpdate;
-    private List<Entity> entitiesPartialDebugUpdate;
+    public List<KeyValuePair<Entity, EntityDespawnData>> entitiesNowOutOfRange;
 
-    private CachingConcurrentDictionary<long, Entity> loadedEntities;
+    public List<Entity> entitiesNowInRange;
+    public List<Entity> entitiesFullUpdate;
+    public List<Entity> entitiesPartialUpdate;
+    public List<Entity> entitiesPositionUpdate;
+    public List<Entity> entitiesPositionMinimalUpdate;
+    public List<Entity> entitiesFullDebugUpdate;
+    public List<Entity> entitiesPartialDebugUpdate;
+
+    public CachingConcurrentDictionary<long, Entity> loadedEntities;
 
     public List<Entity> entitiesPositionMinimalUpdateLowRes = new();
 
@@ -89,7 +90,7 @@ public class PhysicsManager : LoadBalancedTask
     public List<PositionPacket> positionsToSend = new();
     public List<MinPositionPacket> minPositionsToSend = new();
 
-    // Entities > 50 distance away (configurable) only send positions 5 times / second.
+    // Entities > 50 distance away (configurable) only send positions 3 times / second.
     public void PartitionEntities()
     {
         foreach (ConnectedClient client in server.Clients.Values)
@@ -112,6 +113,8 @@ public class PhysicsManager : LoadBalancedTask
     }
 
     // Update positions on UDP.
+    // Only send positions of entities being controlled by the server (no mounted entities or players).
+    // Other positions will be sent once received.
     public void UpdatePositions()
     {
         tick++;
@@ -247,12 +250,16 @@ public class PhysicsManager : LoadBalancedTask
                 udpNetwork.SendBulkPositionPacket(bulkPositionPacket, client.Player);
             }
 
-            system.serverChannel.SendPacket(bulkAnimationPacket, client.Player);
+            nimSystem.serverChannel.SendPacket(bulkAnimationPacket, client.Player);
         }
         
         foreach (Entity entity in loadedEntities.Values)
         {
-            if (entity is EntityPlayer) continue;
+            if (entity is EntityAgent agent)
+            {
+                if (entity is EntityPlayer) continue;
+                agent.Controls.Dirty = false;
+            }
 
             entity.PreviousServerPos.SetFrom(entity.ServerPos);
 
@@ -365,6 +372,7 @@ public class PhysicsManager : LoadBalancedTask
                 server.SendPacket(client.Id, ServerPackets.GetFullEntityPacket(nowInRange));
             }
 
+            // Adjust bulk attributes to NOT include positions.
             if (entitiesFullUpdate.Count > 0 || entitiesPartialUpdate.Count > 0)
             {
                 server.SendPacket(client.Id, ServerPackets.GetBulkEntityAttributesPacket(entitiesFullUpdate, entitiesPartialUpdate, entitiesPositionUpdate, entitiesPositionMinimalUpdate));
@@ -384,12 +392,10 @@ public class PhysicsManager : LoadBalancedTask
         foreach (Entity entity in loadedEntities.Values)
         {
             entity.WatchedAttributes.MarkClean();
-
-            if (entity is EntityAgent agent) agent.Controls.Dirty = false;
         }
     }
 
-    // Add an entity.
+    // Add an entity to receive physics ticks.
     public void AddPhysicsTickables()
     {
         while (toAdd.Count > 0)
@@ -399,7 +405,7 @@ public class PhysicsManager : LoadBalancedTask
         }
     }
 
-    // Remove and entity.
+    // Remove an entity from ticking.
     public void RemovePhysicsTickables()
     {
         while (toRemove.Count > 0)
@@ -417,10 +423,10 @@ public class PhysicsManager : LoadBalancedTask
 
         accumulation += dt;
 
-        if (accumulation > 1000)
+        if (accumulation > 2000)
         {
             accumulation = 0;
-            ServerMain.Logger.Warning("Skipping 1000ms of physics ticks. Overloaded.");
+            ServerMain.Logger.Warning("Skipping 2000ms of physics ticks. Overloaded.");
         }
 
         while (accumulation > tickInterval)

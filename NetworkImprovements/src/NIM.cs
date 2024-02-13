@@ -59,10 +59,6 @@ public class NIM : ModSystem
         mappingsTypeToBehavior.Remove(typeof(EntityControlledPhysics));
         api.RegisterEntityBehaviorClass("controlledphysics", typeof(EntityControlledPhysics));
 
-        // Legacy physics for falling blocks and boats.
-        api.RegisterEntityBehaviorClass("legacyinterpolateposition", typeof(EntityBehaviorInterpolatePosition));
-        api.RegisterEntityBehaviorClass("legacypassivephysics", typeof(EntityBehaviorPassivePhysics));
-
         mappings.Remove("playerphysics");
         mappingsTypeToBehavior.Remove(typeof(EntityBehaviorPlayerPhysics));
         api.RegisterEntityBehaviorClass("playerphysics", typeof(EntityPlayerPhysics));

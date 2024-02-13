@@ -7,14 +7,10 @@ using Vintagestory.API.Server;
 using Vintagestory.Common;
 using Vintagestory.Server;
 
-// COMBAT FIX.
-
-// REMOVE ATTRIBUTE SENDING IN INTERVAL.
 public class ServerSystemPatches
 {
-    // Increase range at which hits are allowed, also increase valid picking range.
-    // Minecraft also does this for lag compensation which is why kill aura can hit people farther away. The only other solution would be to keep a log of previous player locations and also test those.
-    // Counter strike also does that.
+    // Increase range of allowed hits.
+    // Alternative solution: log position of entity 1 second ago and also check that.
     [HarmonyPatch(typeof(ServerSystemEntitySimulation), "HandleEntityInteraction")]
     public static class CombatPatch
     {
@@ -28,7 +24,7 @@ public class ServerSystemPatches
             Entity[] entitiesAround = __instance.GetField<ServerMain>("server").GetEntitiesAround(player.Entity.ServerPos.XYZ, player.WorldData.PickingRange + 10f, player.WorldData.PickingRange + 10f, (Entity e) => e.EntityId == p.EntityId);
             if (entitiesAround == null || entitiesAround.Length == 0)
             {
-                ServerMain.Logger.Debug("HandleEntityInteraction received from client " + client.PlayerName + " but no such entity found in his range");
+                ServerMain.Logger.Debug("HandleEntityInteraction received from client " + client.PlayerName + " but no such entity found in his range!");
                 return false;
             }
 
@@ -62,7 +58,7 @@ public class ServerSystemPatches
         }
     }
 
-    // Send entity attribute methods after physics ticks in physics manager instead. Default 15/s.
+    // No longer send entity attributes here. Verify player position also not checked because that's done elsewhere now.
     [HarmonyPatch(typeof(ServerSystemEntitySimulation), "UpdateEvery200ms")]
     public static class RemoveAttribUpdatesPatch
     {

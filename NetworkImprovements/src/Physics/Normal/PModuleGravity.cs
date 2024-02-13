@@ -41,7 +41,7 @@ public class PModuleGravity : PModule
         if (pos.Y > -100)
         {
             double gravity = (gravityPerSecond + Math.Max(0, -0.015f * pos.Motion.Y)) * (entity.FeetInLiquid ? 0.33f : 1f) * dt;
-            pos.Motion.Y -= gravity * GameMath.Clamp(1 - 50 * controls.GlideSpeed * controls.GlideSpeed, 0, 1);
+            pos.Motion.Y -= gravity * GameMath.Clamp(1 - (50 * controls.GlideSpeed * controls.GlideSpeed), 0, 1);
         }
     }
 }
