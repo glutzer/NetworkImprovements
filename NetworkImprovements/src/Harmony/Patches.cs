@@ -9,15 +9,9 @@ using Vintagestory.API.Util;
 using Vintagestory.Client.NoObf;
 using Vintagestory.GameContent;
 
-// ONLY IMMEDIATELY SET POS OF CLIENT WHEN TELEPORTING.
-
-// DON'T SET POSITION OF ENTITIES RECEIVING A NEW POSITION IF THEY HAVE INTERPOLATION.
-
-// ADD CLASS TO CONTROLLED AI.
-// ADD CLASS TO PROJECTILES.
-// ADD CLASS TO STONES.
 public class Patches
 {
+    // From boat, removed client-side yaw changes. It still changes yaw for some reason and causes jitter though.
     [HarmonyPatch(typeof(EntityBoat), "OnRenderFrame")]
     public static class BoatFix1
     {
@@ -37,11 +31,11 @@ public class Patches
 
             if (__instance.Swimming)
             {
-                float intensity = 0.15f + GlobalConstants.CurrentWindSpeedClient.X * 0.9f;
+                float intensity = 0.15f + (GlobalConstants.CurrentWindSpeedClient.X * 0.9f);
                 float diff = GameMath.DEG2RAD / 2f * intensity;
                 __instance.xangle = GameMath.Sin((float)(ellapsedMs / 1000.0 * 2)) * 8 * diff;
                 __instance.yangle = GameMath.Cos((float)(ellapsedMs / 2000.0 * 2)) * 3 * diff;
-                __instance.zangle = -GameMath.Sin((float)(ellapsedMs / 3000.0 * 2)) * 8 * diff - (float)__instance.AngularVelocity * 5 * Math.Sign(__instance.ForwardSpeed);
+                __instance.zangle = (-GameMath.Sin((float)(ellapsedMs / 3000.0 * 2)) * 8 * diff) - ((float)__instance.AngularVelocity * 5 * Math.Sign(__instance.ForwardSpeed));
 
                 // SidedPos.Pitch = (float)ForwardSpeed * 1.3f;
             }
@@ -100,8 +94,8 @@ public class Patches
             Vec2d motion = __instance.SeatsToMotion(step);
 
             // Add some easing to it.
-            __instance.ForwardSpeed += (motion.X * __instance.SpeedMultiplier - __instance.ForwardSpeed) * dt;
-            __instance.AngularVelocity += (motion.Y * __instance.SpeedMultiplier - __instance.AngularVelocity) * dt;
+            __instance.ForwardSpeed += ((motion.X * __instance.SpeedMultiplier) - __instance.ForwardSpeed) * dt;
+            __instance.AngularVelocity += ((motion.Y * __instance.SpeedMultiplier) - __instance.AngularVelocity) * dt;
 
             EntityPos pos = __instance.SidedPos;
 
@@ -121,7 +115,8 @@ public class Patches
         }
     }
 
-    // Previous pos is the 2nd to last received server pos and interpolation causes the position to be slightly behind that actually. This produces a jerky movement and needs to be changed now.
+    // Falling blocks used previous pos to more smoothly move here. This isn't needed now and breaks because previous pos is set from last received server pos.
+    // Do they just look weird now because they're too accurate?
     [HarmonyPatch(typeof(EntityBlockFallingRenderer), "RenderFallingBlockEntity")]
     public static class TestFix
     {
@@ -135,28 +130,25 @@ public class Patches
 
             rapi.GlToggleBlend(true, EnumBlendMode.Standard);
 
-            double alpha = __instance.GetField<double>("accum") / GlobalConstants.PhysicsFrameTime;
             double rotaccum = __instance.GetField<double>("rotaccum");
 
             float div = __instance.entity.Collided ? 4f : 1.5f;
 
-            Vec3d prevPos = __instance.GetField<Vec3d>("curPos");
             Vec3d curPos = __instance.GetField<Vec3d>("curPos");
 
             IStandardShaderProgram prog = rapi.PreparedStandardShader((int)__instance.entity.Pos.X, (int)(__instance.entity.Pos.Y + 0.2), (int)__instance.entity.Pos.Z);
             Vec3d camPos = capi.World.Player.Entity.CameraPos;
             prog.Tex2D = __instance.GetField<int>("atlasTextureId");
 
-
             prog.ModelMatrix = __instance.GetField<Matrixf>("ModelMat")
                 .Identity()
                 .Translate(
-                    prevPos.X * (1 - alpha) + curPos.X * alpha - camPos.X + GameMath.Sin(capi.InWorldEllapsedMilliseconds / 120f + 30) / 20f / div,
-                    prevPos.Y * (1 - alpha) + curPos.Y * alpha - camPos.Y,
-                    prevPos.Z * (1 - alpha) + curPos.Z * alpha - camPos.Z + GameMath.Cos(capi.InWorldEllapsedMilliseconds / 110f + 20) / 20f / div
+                    curPos.X - camPos.X + (GameMath.Sin((capi.InWorldEllapsedMilliseconds / 120f) + 30) / 20f / div),
+                    curPos.Y - camPos.Y,
+                    curPos.Z - camPos.Z + (GameMath.Cos((capi.InWorldEllapsedMilliseconds / 110f) + 20) / 20f / div)
                 )
                 .RotateX((float)(Math.Sin(rotaccum * 10) / 10.0 / div))
-                .RotateZ((float)(Math.Cos(10 + rotaccum * 9.0) / 10.0 / div))
+                .RotateZ((float)(Math.Cos(10 + (rotaccum * 9.0)) / 10.0 / div))
                .Values
             ;
 

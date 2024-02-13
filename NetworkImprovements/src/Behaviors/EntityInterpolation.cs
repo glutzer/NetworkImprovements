@@ -88,7 +88,6 @@ public class EntityInterpolation : EntityBehavior, IRenderer
 
     public void PopQueue(bool clear)
     {
-        // Lerping only starts if pL is not null.
         dtAccum -= pN.interval;
 
         if (dtAccum < 0) dtAccum = 0;
@@ -99,10 +98,7 @@ public class EntityInterpolation : EntityBehavior, IRenderer
         queueCount--;
 
         // Clear flooded queue.
-        if (clear)
-        {
-            if (queueCount > 1) PopQueue(true);
-        }
+        if (clear && queueCount > 1) PopQueue(true);
     }
 
     public override void Initialize(EntityProperties properties, JsonObject attributes)
@@ -163,23 +159,20 @@ public class EntityInterpolation : EntityBehavior, IRenderer
             targetHeadPitch = entity.ServerPos.HeadPitch;
             targetBodyYaw = agent.BodyYawServer;
         }
+
+        if (queueCount > 20)
+        {
+            PopQueue(true);
+        }
     }
 
     public int wait = 0;
 
     public float targetSpeed = 0.7f;
 
-    // This can be a problem if there's a thousand item entities on the ground?
-    // If queue is empty do nothing and return.
     public void OnRenderFrame(float dt, EnumRenderStage stage)
     {
         if (capi.IsGamePaused) return;
-
-        if (entity == capi.World.Player.Entity)
-        {
-            capi.Event.UnregisterRenderer(this, EnumRenderStage.Before);
-            return;
-        }
 
         entity.Pos.Yaw = LerpRotation(ref currentYaw, targetYaw, dt);
         entity.Pos.Pitch = LerpRotation(ref currentPitch, targetPitch, dt);
@@ -199,45 +192,41 @@ public class EntityInterpolation : EntityBehavior, IRenderer
 
         dtAccum += dt * targetSpeed;
 
-        // If over the interval and there's no queues stop the entity until it can be re-synced.
         while (dtAccum > pN.interval)
         {
             if (queueCount > 0)
             {
-                if (queueCount > 20)
-                {
-                    PopQueue(true);
-                }
-                else
-                {
-                    PopQueue(false);
-                }
-
+                PopQueue(false);
                 wait = 0;
             }
             else
             {
                 wait = 1;
+
+                // This is the most convenient place to check this.
+                // It should be done when the client creates it's own player somewhere.
+                if (entity == capi.World.Player.Entity)
+                {
+                    capi.Event.UnregisterRenderer(this, EnumRenderStage.Before);
+                    return;
+                }
+
                 break;
             }
+
+            // Simulate physics?
         }
 
         float speed = (queueCount * 0.2f) + 0.8f;
         targetSpeed = GameMath.Lerp(targetSpeed, speed, dt * 4);
 
-        // If the entity is an agent and mounted on something.
-        bool isMounted = entity is EntityAgent { MountedOn: not null };
 
-        // Set controlling seat to the position of the controlling player here.
         if (entity is IMountableSupplier mount)
         {
             foreach (IMountable seat in mount.MountPoints)
             {
-                if (seat.MountedBy == capi.World.Player.Entity)
-                {
-                    //return;
-                }
-                else
+                // Set position of other entities.
+                if (seat.MountedBy != capi.World.Player.Entity)
                 {
                     seat.MountedBy?.Pos.SetFrom(seat.MountPosition);
                 }
@@ -245,10 +234,10 @@ public class EntityInterpolation : EntityBehavior, IRenderer
         }
 
         float delta = dtAccum / pN.interval;
-        if (wait != 0) delta = 1; // So FPS below 15 can function.
+        if (wait != 0) delta = 1;
 
-        // Only lerp position if not mounted.
-        if (!isMounted)
+        // Only set position if not mounted.
+        if (agent == null || agent.MountedOn == null)
         {
             entity.Pos.X = GameMath.Lerp(pL.x, pN.x, delta);
             entity.Pos.Y = GameMath.Lerp(pL.y, pN.y, delta);
