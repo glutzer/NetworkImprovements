@@ -1,0 +1,13 @@
+{
+    "type": "code",
+    "modid": "networkimprovements",
+    "name": "NetworkImprovements",
+    "authors": [
+        "sneezerstein"
+    ],
+    "description": ".",
+    "version": "1.4.0",
+    "dependencies": {
+        "game": ""
+    }
+}
