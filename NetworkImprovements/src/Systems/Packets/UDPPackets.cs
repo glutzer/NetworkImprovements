@@ -1,12 +1,8 @@
 ﻿using ProtoBuf;
-using System.Collections.Generic;
-using Vintagestory.API.Common;
 using Vintagestory.API.Common.Entities;
+using Vintagestory.API.Common;
 using Vintagestory.API.Server;
-using Vintagestory.Common;
 
-// Send once. Notifies that the entityId of your client will be connected next packet.
-// IP addresses compared to verify.
 [ProtoContract(ImplicitFields = ImplicitFields.AllFields)]
 public class NotificationPacket
 {
@@ -52,68 +48,6 @@ public class ConnectionPacket
     }
 }
 
-// Animations / controls sent seperately from position.
-[ProtoContract(ImplicitFields = ImplicitFields.AllFields)]
-public class AnimationPacket
-{
-    public long entityId;
-
-    public int[] activeAnimations;
-    public int activeAnimationsCount;
-    public int activeAnimationsLength;
-    public int[] activeAnimationSpeeds;
-    public int activeAnimationSpeedsCount;
-    public int activeAnimationSpeedsLength;
-
-    public AnimationPacket()
-    {
-
-    }
-
-    public AnimationPacket(Entity entity)
-    {
-        entityId = entity.EntityId;
-
-        if (entity.AnimManager == null) return;
-        Dictionary<string, AnimationMetaData> activeAnimationsByAnimCode = entity.AnimManager.ActiveAnimationsByAnimCode;
-        if (activeAnimationsByAnimCode.Count <= 0) return;
-        int[] activeAnimationsArr = new int[activeAnimationsByAnimCode.Count];
-        int[] activeAnimationSpeedsArr = new int[activeAnimationsByAnimCode.Count];
-        int index = 0;
-        foreach (KeyValuePair<string, AnimationMetaData> anim in activeAnimationsByAnimCode)
-        {
-            if (!(anim.Value.TriggeredBy?.DefaultAnim ?? false))
-            {
-                activeAnimationSpeedsArr[index] = CollectibleNet.SerializeFloatPrecise(anim.Value.AnimationSpeed); // Test not serializing this float.
-                activeAnimationsArr[index++] = (int)anim.Value.CodeCrc32;
-            }
-        }
-
-        activeAnimations = activeAnimationsArr;
-        activeAnimationsCount = activeAnimationsArr.Length;
-        activeAnimationsLength = activeAnimationsArr.Length;
-
-        activeAnimationSpeeds = activeAnimationSpeedsArr;
-        activeAnimationSpeedsCount = activeAnimationSpeedsArr.Length;
-        activeAnimationSpeedsLength = activeAnimationSpeedsArr.Length;
-    }
-}
-
-[ProtoContract(ImplicitFields = ImplicitFields.AllFields)]
-public class BulkAnimationPacket
-{
-    public AnimationPacket[] packets;
-}
-
-// For entities, sends them all in one packet.
-[ProtoContract(ImplicitFields = ImplicitFields.AllFields)]
-public class BulkPositionPacket
-{
-    public PositionPacket[] packets;
-    public MinPositionPacket[] minPackets;
-}
-
-// One position packet. When sent by client sets position on server for that player instead.
 [ProtoContract(ImplicitFields = ImplicitFields.AllFields)]
 public class PositionPacket
 {
@@ -132,7 +66,6 @@ public class PositionPacket
     public float motionY;
     public float motionZ;
 
-    // Only for agent.
     public float headYaw;
     public float headPitch;
     public float bodyYaw;
@@ -141,14 +74,14 @@ public class PositionPacket
 
     public int controls;
 
-    public bool lowRes;
+    public int tick;
 
     public PositionPacket()
     {
 
     }
 
-    public PositionPacket(Entity entity, bool lowRes)
+    public PositionPacket(Entity entity, int tick)
     {
         positionVersion = entity.WatchedAttributes.GetInt("positionVersionNumber", 0);
 
@@ -178,7 +111,7 @@ public class PositionPacket
             controls = agent.Controls.ToInt();
         }
 
-        this.lowRes = lowRes;
+        this.tick = tick;
     }
 }
 
@@ -202,14 +135,14 @@ public class MinPositionPacket
 
     public int controls;
 
-    public bool lowRes;
+    public int tick;
 
     public MinPositionPacket()
     {
 
     }
 
-    public MinPositionPacket(Entity entity, bool lowRes)
+    public MinPositionPacket(Entity entity, int tick)
     {
         entityId = (int)entity.EntityId;
 
@@ -239,6 +172,13 @@ public class MinPositionPacket
             controls = agent.Controls.ToInt();
         }
 
-        this.lowRes = lowRes;
+        this.tick = tick;
     }
+}
+
+[ProtoContract(ImplicitFields = ImplicitFields.AllFields)]
+public class BulkPositionPacket
+{
+    public PositionPacket[] packets;
+    public MinPositionPacket[] minPackets;
 }

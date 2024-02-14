@@ -15,22 +15,26 @@ public struct PositionSnapshot
 
     public float interval;
 
-    public PositionSnapshot(EntityPos pos, float interval)
+    public bool isTeleport;
+
+    public PositionSnapshot(Vec3d pos, float interval, bool isTeleport)
     {
         x = pos.X;
         y = pos.Y;
         z = pos.Z;
 
         this.interval = interval;
+        this.isTeleport = isTeleport;
     }
 
-    public PositionSnapshot(double x, double y, double z, float interval)
+    public PositionSnapshot(EntityPos pos, float interval, bool isTeleport)
     {
-        this.x = x;
-        this.y = y;
-        this.z = z;
+        x = pos.X;
+        y = pos.Y;
+        z = pos.Z;
 
         this.interval = interval;
+        this.isTeleport = isTeleport;
     }
 }
 
@@ -99,14 +103,19 @@ public class EntityInterpolation : EntityBehavior, IRenderer
 
         // Clear flooded queue.
         if (clear && queueCount > 1) PopQueue(true);
+
+        entity.ServerPos.SetPos(pN.x, pN.y, pN.z);
+        physics?.HandleRemotePhysics(Math.Max(pN.interval, interval), pN.isTeleport);
     }
+
+    public IRemotePhysics physics;
 
     public override void Initialize(EntityProperties properties, JsonObject attributes)
     {
         currentYaw = entity.ServerPos.Yaw;
         targetYaw = entity.ServerPos.Yaw;
 
-        PushQueue(new PositionSnapshot(entity.ServerPos, 0));
+        PushQueue(new PositionSnapshot(entity.ServerPos, 0, false));
 
         targetYaw = entity.ServerPos.Yaw;
         targetPitch = entity.ServerPos.Pitch;
@@ -126,6 +135,15 @@ public class EntityInterpolation : EntityBehavior, IRenderer
             currentHeadPitch = entity.ServerPos.HeadPitch;
             currentBodyYaw = agent.BodyYawServer;
         }
+
+        foreach (EntityBehavior behavior in entity.SidedProperties.Behaviors)
+        {
+            if (behavior is IRemotePhysics)
+            {
+                physics = behavior as IRemotePhysics;
+                break;
+            }
+        }
     }
 
     /// <summary>
@@ -134,7 +152,9 @@ public class EntityInterpolation : EntityBehavior, IRenderer
     /// </summary>
     public override void OnReceivedServerPos(bool isTeleport, ref EnumHandling handled)
     {
-        PushQueue(new PositionSnapshot(entity.ServerPos, entity.WatchedAttributes.GetBool("lr") ? interval * 5 : interval));
+        float tickInterval = entity.Attributes.GetInt("tickDiff", 1) * interval;
+
+        PushQueue(new PositionSnapshot(entity.ServerPos, tickInterval, isTeleport));
 
         if (isTeleport)
         {
@@ -142,8 +162,8 @@ public class EntityInterpolation : EntityBehavior, IRenderer
             positionQueue.Clear();
             queueCount = 0;
 
-            PushQueue(new PositionSnapshot(entity.ServerPos, entity.WatchedAttributes.GetBool("lr") ? interval * 5 : interval));
-            PushQueue(new PositionSnapshot(entity.ServerPos, entity.WatchedAttributes.GetBool("lr") ? interval * 5 : interval));
+            PushQueue(new PositionSnapshot(entity.ServerPos, tickInterval, false));
+            PushQueue(new PositionSnapshot(entity.ServerPos, tickInterval, false));
 
             PopQueue(false);
             PopQueue(false);
@@ -168,11 +188,77 @@ public class EntityInterpolation : EntityBehavior, IRenderer
 
     public int wait = 0;
 
-    public float targetSpeed = 0.7f;
+    public float targetSpeed = 0.6f;
 
     public void OnRenderFrame(float dt, EnumRenderStage stage)
     {
         if (capi.IsGamePaused) return;
+
+        if (queueCount < wait)
+        {
+            entity.Pos.Yaw = LerpRotation(ref currentYaw, targetYaw, dt);
+            entity.Pos.Pitch = LerpRotation(ref currentPitch, targetPitch, dt);
+            entity.Pos.Roll = LerpRotation(ref currentRoll, targetRoll, dt);
+
+            if (agent != null)
+            {
+                entity.Pos.HeadYaw = LerpRotation(ref currentHeadYaw, targetHeadYaw, dt);
+                entity.Pos.HeadPitch = LerpRotation(ref currentHeadPitch, targetHeadPitch, dt);
+                agent.BodyYaw = LerpRotation(ref currentBodyYaw, targetBodyYaw, dt);
+            }
+            return;
+        }
+
+        dtAccum += dt * targetSpeed;
+
+        while (dtAccum > pN.interval)
+        {
+            if (queueCount > 0)
+            {
+                // This is the most convenient place to check this.
+                // It should be done when the client creates it's own player somewhere.
+                if (entity == capi.World.Player.Entity)
+                {
+                    capi.Event.UnregisterRenderer(this, EnumRenderStage.Before);
+                    return;
+                }
+
+                PopQueue(false);
+                wait = 0;
+            }
+            else
+            {
+                wait = 1;
+
+                break;
+            }
+        }
+
+        float speed = (queueCount * 0.2f) + 0.8f;
+        targetSpeed = GameMath.Lerp(targetSpeed, speed, dt * 4);
+
+        // Don't set position if the player is controlling the mount.
+        if (entity is IMountableSupplier mount)
+        {
+            foreach (IMountable seat in mount.MountPoints)
+            {
+                // Set position of other entities.
+                if (seat.MountedBy != capi.World.Player.Entity)
+                {
+                    seat.MountedBy?.Pos.SetFrom(seat.MountPosition);
+                }
+                else
+                {
+                    if (seat.CanControl)
+                    {
+                        //return;
+                    }
+                }
+            }
+        }
+
+        float delta = dtAccum / pN.interval;
+        if (wait != 0) delta = 1;
 
         entity.Pos.Yaw = LerpRotation(ref currentYaw, targetYaw, dt);
         entity.Pos.Pitch = LerpRotation(ref currentPitch, targetPitch, dt);
@@ -185,57 +271,6 @@ public class EntityInterpolation : EntityBehavior, IRenderer
             agent.BodyYaw = LerpRotation(ref currentBodyYaw, targetBodyYaw, dt);
         }
 
-        if (queueCount < wait)
-        {
-            return;
-        }
-
-        dtAccum += dt * targetSpeed;
-
-        while (dtAccum > pN.interval)
-        {
-            if (queueCount > 0)
-            {
-                PopQueue(false);
-                wait = 0;
-            }
-            else
-            {
-                wait = 1;
-
-                // This is the most convenient place to check this.
-                // It should be done when the client creates it's own player somewhere.
-                if (entity == capi.World.Player.Entity)
-                {
-                    capi.Event.UnregisterRenderer(this, EnumRenderStage.Before);
-                    return;
-                }
-
-                break;
-            }
-
-            // Simulate physics?
-        }
-
-        float speed = (queueCount * 0.2f) + 0.8f;
-        targetSpeed = GameMath.Lerp(targetSpeed, speed, dt * 4);
-
-
-        if (entity is IMountableSupplier mount)
-        {
-            foreach (IMountable seat in mount.MountPoints)
-            {
-                // Set position of other entities.
-                if (seat.MountedBy != capi.World.Player.Entity)
-                {
-                    seat.MountedBy?.Pos.SetFrom(seat.MountPosition);
-                }
-            }
-        }
-
-        float delta = dtAccum / pN.interval;
-        if (wait != 0) delta = 1;
-
         // Only set position if not mounted.
         if (agent == null || agent.MountedOn == null)
         {
@@ -245,6 +280,7 @@ public class EntityInterpolation : EntityBehavior, IRenderer
         }
     }
 
+    // I don't like doing it like this but AI turns instantly so using the actual lerp is bad.
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static float LerpRotation(ref float current, float target, float dt)
     {

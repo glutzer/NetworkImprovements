@@ -11,6 +11,7 @@ using Vintagestory.GameContent;
 
 public class Patches
 {
+    /*
     // From boat, removed client-side yaw changes. It still changes yaw for some reason and causes jitter though.
     [HarmonyPatch(typeof(EntityBoat), "OnRenderFrame")]
     public static class BoatFix1
@@ -61,7 +62,6 @@ public class Patches
             }
 
             // Not omitted just too lazy to use reflection.
-            /*
             if (selfSitting)
             {
                 modsysSounds.NowInMotion((float)Pos.Motion.Length());
@@ -70,7 +70,6 @@ public class Patches
             {
                 modsysSounds.NotMounted();
             }
-            */
 
             return false;
         }
@@ -114,6 +113,7 @@ public class Patches
             return false;
         }
     }
+    */
 
     // Falling blocks used previous pos to more smoothly move here. This isn't needed now and breaks because previous pos is set from last received server pos.
     // Do they just look weird now because they're too accurate?

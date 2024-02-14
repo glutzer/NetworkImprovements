@@ -24,17 +24,16 @@ public class NIM : ModSystem
 
     public override double ExecuteOrder() => 0;
 
+    public long listener;
+
     public override void Start(ICoreAPI api)
     {
         // Create the UDP system for sending packets.
         // Starts relevant thread.
-        udpNetwork = new UDPNetwork(api);
+        udpNetwork = new UDPNetwork(api, this);
 
-        // Create a physics manager on both sides. Sends data to clients on UDP network.
-        if (api is ICoreServerAPI serverApi)
-        {
-            physicsManager = new PhysicsManager(serverApi, udpNetwork, this);
-        }
+        // Handles all server side physics and sents packets out in sync.
+        if (api is ICoreServerAPI serverApi) physicsManager = new PhysicsManager(serverApi, udpNetwork, this);
 
         RemapClasses(api);
     }
@@ -84,9 +83,13 @@ public class NIM : ModSystem
         listeners.Remove(listenerFound);
 
         clientChannel = capi.Network.RegisterChannel("nim")
+            .RegisterMessageType<PositionPacket>()
+            .RegisterMessageType<AnimationPacket>()
             .RegisterMessageType<BulkAnimationPacket>()
             .RegisterMessageType<NotificationPacket>()
-            .SetMessageHandler<BulkAnimationPacket>(HandleAnimationPacket)
+            .SetMessageHandler<PositionPacket>(HandleTCPPositionPacket)
+            .SetMessageHandler<AnimationPacket>(HandleAnimationPacket)
+            .SetMessageHandler<BulkAnimationPacket>(HandleBulkAnimationPacket)
             .SetMessageHandler<NotificationPacket>(ClientNotified);
 
         capi.Event.PlayerJoin += Event_PlayerJoin;
@@ -109,6 +112,8 @@ public class NIM : ModSystem
         sapi = api;
 
         serverChannel = sapi.Network.RegisterChannel("nim")
+            .RegisterMessageType<PositionPacket>()
+            .RegisterMessageType<AnimationPacket>()
             .RegisterMessageType<BulkAnimationPacket>()
             .RegisterMessageType<NotificationPacket>()
             .SetMessageHandler<NotificationPacket>(ServerNotified);
@@ -129,22 +134,41 @@ public class NIM : ModSystem
         udpNetwork.connectedClients.Remove(byPlayer);
     }
 
-    public long listener;
-
-    // Client notified that it's connected, stop sending connection requests.
     public void ClientNotified(NotificationPacket packet)
     {
+        // Client notified that it's connected, stop sending connection requests.
         capi.Event.UnregisterGameTickListener(listener);
     }
-
-    // Server notified client is trying to connect.
+    
     public void ServerNotified(IServerPlayer fromPlayer, NotificationPacket packet)
     {
+        // Server notified client is trying to connect.
         udpNetwork.connectingClients.Add(fromPlayer.Entity.EntityId, fromPlayer);
     }
 
-    // Animations have to be sent seperately from position due to possible loss.
-    public void HandleAnimationPacket(BulkAnimationPacket bulkPacket)
+    public void HandleTCPPositionPacket(PositionPacket packet)
+    {
+        udpNetwork.HandleSinglePacket(SerializerUtil.Serialize(packet));
+    }
+
+    public void HandleAnimationPacket(AnimationPacket packet)
+    {
+        Entity entity = capi.World.GetEntityById(packet.entityId);
+
+        if (entity == null) return;
+
+        if (entity.Properties?.Client?.LoadedShapeForEntity?.Animations != null)
+        {
+            float[] speeds = new float[packet.activeAnimationSpeedsCount];
+            for (int x = 0; x < speeds.Length; x++)
+            {
+                speeds[x] = CollectibleNet.DeserializeFloatPrecise(packet.activeAnimationSpeeds[x]);
+            }
+            entity.OnReceivedServerAnimations(packet.activeAnimations, packet.activeAnimationsCount, speeds);
+        }
+    }
+
+    public void HandleBulkAnimationPacket(BulkAnimationPacket bulkPacket)
     {
         if (bulkPacket.packets == null) return;
 
@@ -194,16 +218,16 @@ public class NIM : ModSystem
         physicsManager?.Dispose();
         udpNetwork.Dispose();
     }
-
-    // Add an entity to the physics ticking system on the server.
+    
     public static void RemovePhysicsTickable(ICoreAPI api, IPhysicsTickable entityBehavior)
     {
+        // Add an entity to the physics ticking system on the server.
         api.ModLoader.GetModSystem<NIM>().physicsManager.toRemove.Enqueue(entityBehavior);
     }
 
-    // Remove an entity from the physics ticking system on the server.
     public static void AddPhysicsTickable(ICoreAPI api, IPhysicsTickable entityBehavior)
     {
+        // Remove an entity from the physics ticking system on the server.
         api.ModLoader.GetModSystem<NIM>().physicsManager.toAdd.Enqueue(entityBehavior);
     }
 }

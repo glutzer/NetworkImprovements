@@ -39,7 +39,7 @@ public class PhysicsManager : LoadBalancedTask
     {
         this.sapi = sapi;
         this.udpNetwork = udpNetwork;
-        this.nimSystem = system;
+        nimSystem = system;
 
         int threadCount = Math.Min(8, MagicNum.MaxPhysicsThreads);
 
@@ -112,6 +112,8 @@ public class PhysicsManager : LoadBalancedTask
         }
     }
 
+    public HashSet<Entity> tickedEntities = new();
+
     // Update positions on UDP.
     // Only send positions of entities being controlled by the server (no mounted entities or players).
     // Other positions will be sent once received.
@@ -145,16 +147,20 @@ public class PhysicsManager : LoadBalancedTask
             {
                 Entity entity = sapi.World.GetEntityById(id);
 
-                if (entity is EntityPlayer || entity == null) continue;
+                // Controlled id is the entity id of the player entity controlling this. || entity.Attributes.GetInt("cid") != 0 || entity is IMountableSupplier
+                if (entity == null || entity is EntityPlayer) continue;
 
                 EntityAgent entityAgent = entity as EntityAgent;
 
                 if ((entity.AnimManager != null && entity.AnimManager.AnimationsDirty) || entity.IsTeleport)
                 {
                     entitiesPositionUpdate.Add(entity);
+                    tickedEntities.Add(entity);
                 }
                 else if (forceUpdate || !entity.ServerPos.BasicallySameAs(entity.PreviousServerPos, 0.0001) || (entityAgent != null && entityAgent.Controls.Dirty))
                 {
+                    tickedEntities.Add(entity);
+
                     if (client.TrackedEntities[id])
                     {
                         entitiesPositionMinimalUpdate.Add(entity);
@@ -180,7 +186,7 @@ public class PhysicsManager : LoadBalancedTask
             int i = 0;
             foreach (Entity entity in entitiesPositionUpdate)
             {
-                positionsToSend.Add(new PositionPacket(entity, false));
+                positionsToSend.Add(new PositionPacket(entity, entity.Attributes.GetInt("tick", 0)));
                 size++;
 
                 bulkAnimationPacket.packets[i++] = new AnimationPacket(entity);
@@ -200,7 +206,9 @@ public class PhysicsManager : LoadBalancedTask
 
             foreach (Entity entity in entitiesPositionMinimalUpdate)
             {
-                minPositionsToSend.Add(new MinPositionPacket(entity, false));
+                int entityTick = entity.Attributes.GetInt("tick", 0);
+
+                minPositionsToSend.Add(new MinPositionPacket(entity, entity.Attributes.GetInt("tick", 0)));
                 size++;
 
                 if (size > 100)
@@ -221,7 +229,9 @@ public class PhysicsManager : LoadBalancedTask
 
             foreach (Entity entity in entitiesPositionMinimalUpdateLowRes)
             {
-                minPositionsToSend.Add(new MinPositionPacket(entity, true));
+                int entityTick = entity.Attributes.GetInt("tick", 0);
+
+                minPositionsToSend.Add(new MinPositionPacket(entity, entity.Attributes.GetInt("tick", 0)));
                 size++;
 
                 if (size > 100)
@@ -267,6 +277,14 @@ public class PhysicsManager : LoadBalancedTask
 
             entity.IsTeleport = false;
         }
+
+        // If any position has been set out, an entity has been ticked.
+        foreach (Entity entity in tickedEntities)
+        {
+            entity.Attributes.SetInt("tick", entity.Attributes.GetInt("tick") + 1);
+        }
+
+        tickedEntities.Clear();
 
         if (tick % 45 == 0)
         {
@@ -372,7 +390,7 @@ public class PhysicsManager : LoadBalancedTask
                 server.SendPacket(client.Id, ServerPackets.GetFullEntityPacket(nowInRange));
             }
 
-            // Adjust bulk attributes to NOT include positions.
+            // Adjust bulk attributes to NOT include positions since they aren't sent here anyways.
             if (entitiesFullUpdate.Count > 0 || entitiesPartialUpdate.Count > 0)
             {
                 server.SendPacket(client.Id, ServerPackets.GetBulkEntityAttributesPacket(entitiesFullUpdate, entitiesPartialUpdate, entitiesPositionUpdate, entitiesPositionMinimalUpdate));
@@ -436,13 +454,84 @@ public class PhysicsManager : LoadBalancedTask
         }
     }
 
+    public List<Entity> toSendSpawn = new();
+
+    public void SendEntitySpawns()
+    {
+        float adjustedRate = tickInterval * rateModifier;
+
+        lock (server.EntitySpawnSendQueue)
+        {
+            if (server.EntitySpawnSendQueue.Count <= 0) return;
+
+            int squareDistance = MagicNum.DefaultEntityTrackingRange * MagicNum.ServerChunkSize * MagicNum.DefaultEntityTrackingRange * MagicNum.ServerChunkSize;
+
+            foreach (ConnectedClient client in server.Clients.Values)
+            {
+                if ((client.State != EnumClientState.Connected && client.State != EnumClientState.Playing) || client.Entityplayer == null) continue;
+
+                foreach (Entity entity in server.EntitySpawnSendQueue)
+                {
+                    if (entity.ServerPos.InRangeOf(client.Entityplayer.ServerPos, squareDistance))
+                    {
+                        client.TrackedEntities[entity.EntityId] = true;
+                        toSendSpawn.Add(entity);
+                    }
+                }
+
+                if (toSendSpawn.Count > 0)
+                {
+                    server.SendPacket(client.Id, ServerPackets.GetEntitySpawnPacket(toSendSpawn));
+                }
+
+                toSendSpawn.Clear();
+            }
+
+            foreach (Entity entity in server.EntitySpawnSendQueue)
+            {
+                entity.packet = null;
+
+                foreach (EntityBehavior behavior in entity.SidedProperties.Behaviors)
+                {
+                    if (behavior is IPhysicsTickable tickable)
+                    {
+                        tickable.Ticking = true;
+
+                        tickable.OnPhysicsTick(adjustedRate);
+                        tickable.AfterPhysicsTick(adjustedRate);
+
+                        tickable.OnPhysicsTick(adjustedRate);
+                        tickable.AfterPhysicsTick(adjustedRate);
+
+                        break;
+                    }
+                }
+
+                entity.Attributes.SetInt("tick", 2);
+            }
+
+            foreach (ConnectedClient client in server.Clients.Values)
+            {
+                if ((client.State != EnumClientState.Connected && client.State != EnumClientState.Playing) || client.Entityplayer == null) continue;
+
+                foreach (Entity entity in server.EntitySpawnSendQueue)
+                {
+                    if (entity.ServerPos.InRangeOf(client.Entityplayer.ServerPos, squareDistance))
+                    {
+                        nimSystem.serverChannel.SendPacket(new PositionPacket(entity, 1), client.Player);
+                    }
+                }
+            }
+
+            server.EntitySpawnSendQueue.Clear();
+        }
+    }
+
     public int currentTick;
     public static float rateModifier = 1;
 
     public void DoServerTick()
     {
-        // Send spawns every tick?
-
         float adjustedRate = tickInterval * rateModifier;
 
         currentTick++;
@@ -453,6 +542,7 @@ public class PhysicsManager : LoadBalancedTask
         if (currentTick % 2 == 0)
         {
             UpdatePositions();
+            SendEntitySpawns();
         }
 
         if (tickableCount == 0) return;

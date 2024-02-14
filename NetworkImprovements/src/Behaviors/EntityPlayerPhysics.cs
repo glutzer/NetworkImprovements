@@ -1,24 +1,26 @@
 ﻿using System;
+using System.Linq;
 using Vintagestory.API.Client;
 using Vintagestory.API.Common;
 using Vintagestory.API.Common.Entities;
 using Vintagestory.API.Config;
 using Vintagestory.API.Datastructures;
 using Vintagestory.API.MathTools;
-using Vintagestory.API.Server;
 using Vintagestory.Client.NoObf;
+using Vintagestory.GameContent;
 using Vintagestory.Server;
 
 // Client-side player physics.
-public class EntityPlayerPhysics : EntityControlledPhysics, IRenderer
+public class EntityPlayerPhysics : EntityControlledPhysics, IRenderer, IRemotePhysics
 {
     public IPlayer player;
+
     public ServerPlayer serverPlayer;
     public EntityPlayer entityPlayer;
+
     public int posVersion = 0;
 
     public ClientMain clientMain;
-
     public UDPNetwork udpNetwork;
 
     public EntityPlayerPhysics(Entity entity) : base(entity)
@@ -30,40 +32,22 @@ public class EntityPlayerPhysics : EntityControlledPhysics, IRenderer
 
     public override void Initialize(EntityProperties properties, JsonObject attributes)
     {
-        if (entity.Api is ICoreClientAPI) capi = entity.Api as ICoreClientAPI;
-        if (entity.Api is ICoreServerAPI) sapi = entity.Api as ICoreServerAPI;
-
         entityPlayer = entity as EntityPlayer;
+
+        Init();
+        SetProperties(properties, attributes);
 
         if (entity.Api.Side == EnumAppSide.Client)
         {
             clientMain = (ClientMain)capi.World;
 
-            // Remote on server. First render frame on client checks if it's a local player.
-            remote = false;
-        }
+            smoothStepping = true;
 
-        stepHeight = attributes["stepHeight"].AsFloat(0.6f);
-        sneakTestCollisionbox = entity.CollisionBox.Clone().OmniNotDownGrowBy(-0.1f);
-        sneakTestCollisionbox.Y2 /= 2;
-        smoothStepping = !remote;
-
-        // If the controller of the player.
-        if (!remote)
-        {
             capi.Event.RegisterRenderer(this, EnumRenderStage.Before, "playerphysics");
+
             udpNetwork = capi.ModLoader.GetModSystem<NIM>().udpNetwork;
         }
-
-        SetModules();
-
-        JsonObject physics = properties?.Attributes?["physics"];
-        for (int i = 0; i < physicsModules.Count; i++)
-        {
-            physicsModules[i].Initialize(physics, entity);
-        }
-
-        if (remote)
+        else
         {
             EnumHandling handling = EnumHandling.Handled;
             OnReceivedServerPos(true, ref handling);
@@ -83,34 +67,28 @@ public class EntityPlayerPhysics : EntityControlledPhysics, IRenderer
         physicsModules.Add(new PModuleKnockback());
     }
 
-    public void OnReceivedClientPos(int version, int tickDiff)
-    {
-        if (!remote) return;
-
-        serverPlayer ??= entityPlayer.Player as ServerPlayer;
-
-        // Both normal and server pos are now set to the received pos.
-        // At the very least there should be movement.
-        entity.ServerPos.SetFrom(entity.Pos);
-
-        bool isTeleport = version > posVersion;
-
-        if (isTeleport)
-        {
-            posVersion = version;
-        }
-
-        HandleRemote(updateInterval, isTeleport);
-    }
-
     public override void OnReceivedServerPos(bool isTeleport, ref EnumHandling handled)
     {
-        if (!remote) return;
-
-        HandleRemote(updateInterval, isTeleport);
+        //int tickDiff = entity.Attributes.GetInt("tickDiff", 1);
+        //HandleRemotePhysics(clientInterval * tickDiff, isTeleport);
     }
 
-    public void HandleRemote(float dt, bool isTeleport)
+    public new void OnReceivedClientPos(int version, int tickDiff)
+    {
+        serverPlayer ??= entityPlayer.Player as ServerPlayer;
+        entity.ServerPos.SetFrom(entity.Pos);
+
+        if (version > previousVersion)
+        {
+            previousVersion = version;
+            HandleRemotePhysics(clientInterval, true);
+            return;
+        }
+
+        HandleRemotePhysics(clientInterval, false);
+    }
+
+    public new void HandleRemotePhysics(float dt, bool isTeleport)
     {
         player ??= entityPlayer.Player;
 
@@ -119,7 +97,7 @@ public class EntityPlayerPhysics : EntityControlledPhysics, IRenderer
         if (nPos == null)
         {
             nPos = new();
-            nPos.Set(entity.ServerPos); // Should be sided pos?
+            nPos.Set(entity.ServerPos);
         }
 
         float dtFactor = dt * 60;
@@ -152,10 +130,7 @@ public class EntityPlayerPhysics : EntityControlledPhysics, IRenderer
         lPos.Motion.Y = (nPos.Y - lPos.Y) / dtFactor;
         lPos.Motion.Z = (nPos.Z - lPos.Z) / dtFactor;
 
-        if (lPos.Motion.Length() > 20)
-        {
-            lPos.Motion.Set(0, 0, 0);
-        }
+        if (lPos.Motion.Length() > 20) lPos.Motion.Set(0, 0, 0);
 
         // Anti-cheat.
         if (sapi != null)
@@ -203,16 +178,14 @@ public class EntityPlayerPhysics : EntityControlledPhysics, IRenderer
         // Set pos for triggering events.
         entity.Pos.SetFrom(entity.ServerPos);
 
-        prevPos.Set(lPos);
-
         SetState(lPos, dt);
 
         // No-clip detection.
         if (sapi != null)
         {
-            collisionTester.ApplyTerrainCollision(entity, lastValid, dtFactor, ref outPos, 0, 0);
+            collisionTester.ApplyTerrainCollision(entity, lastValid, dtFactor, ref newPos, 0, 0);
 
-            double difference = outPos.DistanceTo(nPos);
+            double difference = newPos.DistanceTo(nPos);
 
             if (difference > 0.2)
             {
@@ -220,23 +193,12 @@ public class EntityPlayerPhysics : EntityControlledPhysics, IRenderer
             }
             else
             {
-                lastValid.SetFrom(outPos);
+                lastValid.SetFrom(newPos);
             }
         }
 
-        // Apply gravity then set collision.
-        double gravityStrength = (1 / 60f * dtFactor) + Math.Max(0, -0.015f * lPos.Motion.Y * dtFactor);
-        lPos.Motion.Y -= gravityStrength;
-        collisionTester.ApplyTerrainCollision(entity, lPos, dtFactor, ref outPos, 0, 0);
-        bool falling = lPos.Motion.Y < 0;
-        entity.OnGround = entity.CollidedVertically && falling;
-        lPos.Motion.Y += gravityStrength;
-
-        lPos.SetPos(nPos);
-
-        EntityControls controls = ((EntityAgent)entity).Controls;
-
-        ApplyTests(lPos, controls, dt);
+        RemoteMotionAndCollision(lPos, dtFactor);
+        ApplyTests(lPos, ((EntityAgent)entity).Controls, dt, true);
     }
 
     public EntityPos lastValid;
@@ -257,9 +219,7 @@ public class EntityPlayerPhysics : EntityControlledPhysics, IRenderer
     public void SimPhysics(float dt, EntityPos pos)
     {
         if (entity.State != EnumEntityState.Active) return;
-
         player ??= entityPlayer.Player;
-
         if (player == null) return;
 
         EntityControls controls = ((EntityAgent)entity).Controls;
@@ -285,8 +245,8 @@ public class EntityPlayerPhysics : EntityControlledPhysics, IRenderer
             return;
         }
 
-        ApplyMotion(pos, controls, dt);
-        ApplyTests(pos, controls, dt);
+        MotionAndCollision(pos, controls, dt);
+        ApplyTests(pos, controls, dt, false);
 
         // Attempt to stop gliding/flying.
         if (controls.Gliding)
@@ -394,10 +354,8 @@ public class EntityPlayerPhysics : EntityControlledPhysics, IRenderer
         // Unregister the entity if it isn't the player.
         if (capi.World.Player.Entity != entity)
         {
-            remote = true;
             smoothStepping = false;
             capi.Event.UnregisterRenderer(this, EnumRenderStage.Before);
-            physicsModules.Clear();
             udpNetwork = null;
             return;
         }
@@ -409,9 +367,15 @@ public class EntityPlayerPhysics : EntityControlledPhysics, IRenderer
             accum = 0;
         }
 
+        //IMountable mount = entityPlayer.MountedOn;
+        //IMountableSupplier mountSupplier = mount?.MountSupplier;
+        //IPhysicsTickable tickable = (mountSupplier as Entity)?.SidedProperties.Behaviors.Find(b => b is IPhysicsTickable) as IPhysicsTickable;
+
         while (accum >= interval)
         {
             OnPhysicsTick(interval);
+            //tickable?.OnPhysicsTick(interval);
+
             accum -= interval;
             currentTick++;
 
@@ -421,14 +385,17 @@ public class EntityPlayerPhysics : EntityControlledPhysics, IRenderer
                 if (clientMain.GetField<bool>("Spawned") && clientMain.EntityPlayer.Alive)
                 {
                     udpNetwork.SendPlayerPacket();
+                    //if (mountSupplier != null) udpNetwork.SendMountPacket(mountSupplier as Entity);
                 }
             }
 
             AfterPhysicsTick(interval);
+            //tickable?.OnPhysicsTick(interval);
         }
 
         // For camera, lerps from prevPos to current pos by 1 + accum.
         entity.PhysicsUpdateWatcher?.Invoke(accum, prevPos);
+        //(mountSupplier as Entity)?.PhysicsUpdateWatcher?.Invoke(accum, prevPos);
     }
 
     public double RenderOrder => 1;

@@ -14,4 +14,6 @@
     /// Called after physics has ticked and is thread-safe.
     /// </summary>
     public void AfterPhysicsTick(float dt);
+
+    public bool Ticking { get; set; }
 }

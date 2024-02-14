@@ -1,4 +1,6 @@
 ﻿using HarmonyLib;
+using ProperVersion;
+using Vintagestory.API.Client;
 using Vintagestory.API.Common;
 using Vintagestory.API.Common.Entities;
 using Vintagestory.API.Config;
@@ -66,6 +68,47 @@ public class ServerSystemPatches
         public static bool Prefix(ServerSystemEntitySimulation __instance)
         {
             //__instance.CallMethod("VerifyPlayerPositions"); Not needed now, done properly.
+            return false;
+        }
+    }
+
+    [HarmonyPatch(typeof(ServerSystemEntitySimulation), "OnServerTick")]
+    public static class SendSpawnsPatch
+    {
+        [HarmonyPrefix]
+        public static bool Prefix(ServerSystemEntitySimulation __instance, float dt)
+        {
+            ServerMain server = __instance.GetField<ServerMain>("server");
+
+            foreach (ConnectedClient client in server.Clients.Values)
+            {
+                if (client.IsPlayingClient)
+                {
+                    ServerPlayer player = client.Player;
+                    player.Entity.PreviousBlockSelection = player.Entity.BlockSelection?.Position.Copy();
+                    bool bFilter(BlockPos pos, Block block) => block == null || block.RenderPass != EnumChunkRenderPass.Meta || client.WorldData.RenderMetaBlocks;
+                    bool eFilter(Entity e) => e.IsInteractable && e.EntityId != player.Entity.EntityId;
+                    server.RayTraceForSelection(player, ref player.Entity.BlockSelection, ref player.Entity.EntitySelection, bFilter, eFilter);
+                    if (player.Entity.BlockSelection != null)
+                    {
+                        bool firstTick = player.Entity.PreviousBlockSelection == null || player.Entity.BlockSelection.Position != player.Entity.PreviousBlockSelection;
+                        server.BlockAccessor.GetBlock(player.Entity.BlockSelection.Position).OnBeingLookedAt(player, player.Entity.BlockSelection, firstTick);
+                    }
+                }
+            }
+
+            __instance.CallMethod("TickEntities", dt);
+
+            __instance.CallMethod("endPlayerEntityDeaths");
+
+            //SendEntitySpawns(); // Done in physics manager now.
+
+            __instance.SetField("accum", __instance.GetField<float>("accum") + dt);
+            if (__instance.GetField<float>("accum") > 3f)
+            {
+                __instance.CallMethod("UpdateEntitiesTickingFlag");
+            }
+
             return false;
         }
     }

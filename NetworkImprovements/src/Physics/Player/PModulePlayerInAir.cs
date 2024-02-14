@@ -4,7 +4,7 @@ using Vintagestory.API.Common.Entities;
 using Vintagestory.API.Datastructures;
 using Vintagestory.API.MathTools;
 
-public class PlayerInAir : PModuleInAir
+public class PModulePlayerInAir : PModuleInAir
 {
     public float airMovingStrengthFalling;
 
