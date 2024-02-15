@@ -42,6 +42,8 @@ public class EntityInterpolation : EntityBehavior, IRenderer
 {
     public ICoreClientAPI capi;
     public EntityAgent agent;
+    public bool isMountable;
+    public IMountableSupplier mountableSupplier;
 
     public EntityInterpolation(Entity entity) : base(entity)
     {
@@ -52,6 +54,9 @@ public class EntityInterpolation : EntityBehavior, IRenderer
         capi.Event.RegisterRenderer(this, EnumRenderStage.Before, "interpolateposition");
 
         agent = entity as EntityAgent;
+
+        isMountable = entity is IMountableSupplier;
+        mountableSupplier = entity as IMountableSupplier;
     }
 
     public float dtAccum = 0;
@@ -103,6 +108,8 @@ public class EntityInterpolation : EntityBehavior, IRenderer
 
         // Clear flooded queue.
         if (clear && queueCount > 1) PopQueue(true);
+
+        if (isMountable && IsBeingControlled()) return;
 
         entity.ServerPos.SetPos(pN.x, pN.y, pN.z);
         physics?.HandleRemotePhysics(Math.Max(pN.interval, interval), pN.isTeleport);
@@ -187,8 +194,28 @@ public class EntityInterpolation : EntityBehavior, IRenderer
     }
 
     public int wait = 0;
-
     public float targetSpeed = 0.6f;
+
+    public bool IsBeingControlled()
+    {
+        foreach (IMountable seat in mountableSupplier.MountPoints)
+        {
+            // Set position of other entities.
+            if (seat.MountedBy != capi.World.Player.Entity)
+            {
+                continue;
+            }
+            else
+            {
+                if (seat.CanControl && seat.MountedBy != null)
+                {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
 
     public void OnRenderFrame(float dt, EnumRenderStage stage)
     {
@@ -196,16 +223,20 @@ public class EntityInterpolation : EntityBehavior, IRenderer
 
         if (queueCount < wait)
         {
-            entity.Pos.Yaw = LerpRotation(ref currentYaw, targetYaw, dt);
-            entity.Pos.Pitch = LerpRotation(ref currentPitch, targetPitch, dt);
-            entity.Pos.Roll = LerpRotation(ref currentRoll, targetRoll, dt);
-
-            if (agent != null)
+            if (!isMountable || !IsBeingControlled())
             {
-                entity.Pos.HeadYaw = LerpRotation(ref currentHeadYaw, targetHeadYaw, dt);
-                entity.Pos.HeadPitch = LerpRotation(ref currentHeadPitch, targetHeadPitch, dt);
-                agent.BodyYaw = LerpRotation(ref currentBodyYaw, targetBodyYaw, dt);
+                entity.Pos.Yaw = LerpRotation(ref currentYaw, targetYaw, dt);
+                entity.Pos.Pitch = LerpRotation(ref currentPitch, targetPitch, dt);
+                entity.Pos.Roll = LerpRotation(ref currentRoll, targetRoll, dt);
+
+                if (agent != null)
+                {
+                    entity.Pos.HeadYaw = LerpRotation(ref currentHeadYaw, targetHeadYaw, dt);
+                    entity.Pos.HeadPitch = LerpRotation(ref currentHeadPitch, targetHeadPitch, dt);
+                    agent.BodyYaw = LerpRotation(ref currentBodyYaw, targetBodyYaw, dt);
+                }
             }
+            
             return;
         }
 
@@ -238,9 +269,9 @@ public class EntityInterpolation : EntityBehavior, IRenderer
         targetSpeed = GameMath.Lerp(targetSpeed, speed, dt * 4);
 
         // Don't set position if the player is controlling the mount.
-        if (entity is IMountableSupplier mount)
+        if (isMountable)
         {
-            foreach (IMountable seat in mount.MountPoints)
+            foreach (IMountable seat in mountableSupplier.MountPoints)
             {
                 // Set position of other entities.
                 if (seat.MountedBy != capi.World.Player.Entity)
@@ -251,7 +282,10 @@ public class EntityInterpolation : EntityBehavior, IRenderer
                 {
                     if (seat.CanControl)
                     {
-                        //return;
+                        currentYaw = entity.Pos.Yaw;
+                        currentPitch = entity.Pos.Pitch;
+                        currentRoll = entity.Pos.Roll;
+                        return;
                     }
                 }
             }

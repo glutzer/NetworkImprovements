@@ -3,7 +3,6 @@ using System;
 using Vintagestory.API.Client;
 using Vintagestory.API.Common;
 using Vintagestory.API.Common.Entities;
-using Vintagestory.API.Config;
 using Vintagestory.API.MathTools;
 using Vintagestory.API.Util;
 using Vintagestory.Client.NoObf;
@@ -11,110 +10,6 @@ using Vintagestory.GameContent;
 
 public class Patches
 {
-    /*
-    // From boat, removed client-side yaw changes. It still changes yaw for some reason and causes jitter though.
-    [HarmonyPatch(typeof(EntityBoat), "OnRenderFrame")]
-    public static class BoatFix1
-    {
-        [HarmonyPrefix]
-        public static bool Prefix(EntityBoat __instance, float dt, EnumRenderStage stage)
-        {
-            ICoreClientAPI capi = __instance.Api as ICoreClientAPI;
-
-            if (capi.IsGamePaused)
-            {
-                return false;
-            }
-
-            __instance.CallMethod("updateBoatAngleAndMotion", dt);
-
-            long ellapsedMs = capi.InWorldEllapsedMilliseconds;
-
-            if (__instance.Swimming)
-            {
-                float intensity = 0.15f + (GlobalConstants.CurrentWindSpeedClient.X * 0.9f);
-                float diff = GameMath.DEG2RAD / 2f * intensity;
-                __instance.xangle = GameMath.Sin((float)(ellapsedMs / 1000.0 * 2)) * 8 * diff;
-                __instance.yangle = GameMath.Cos((float)(ellapsedMs / 2000.0 * 2)) * 3 * diff;
-                __instance.zangle = (-GameMath.Sin((float)(ellapsedMs / 3000.0 * 2)) * 8 * diff) - ((float)__instance.AngularVelocity * 5 * Math.Sign(__instance.ForwardSpeed));
-
-                // SidedPos.Pitch = (float)ForwardSpeed * 1.3f;
-            }
-
-            EntityShapeRenderer esr = __instance.Properties.Client.Renderer as EntityShapeRenderer;
-            if (esr == null) return false;
-
-            esr.xangle = __instance.xangle;
-            esr.yangle = __instance.yangle;
-            esr.zangle = __instance.zangle;
-
-            bool selfSitting = false;
-
-            foreach (EntityBoatSeat seat in __instance.Seats)
-            {
-                selfSitting |= seat.Passenger == capi.World.Player.Entity;
-                if (seat.Passenger?.Properties?.Client.Renderer is EntityShapeRenderer pesr)
-                {
-                    pesr.xangle = __instance.xangle;
-                    pesr.yangle = __instance.yangle;
-                    pesr.zangle = __instance.zangle;
-                }
-            }
-
-            // Not omitted just too lazy to use reflection.
-            if (selfSitting)
-            {
-                modsysSounds.NowInMotion((float)Pos.Motion.Length());
-            }
-            else
-            {
-                modsysSounds.NotMounted();
-            }
-
-            return false;
-        }
-    }
-
-    [HarmonyPatch(typeof(EntityBoat), "updateBoatAngleAndMotion")]
-    public static class BoatFix2
-    {
-        [HarmonyPrefix]
-        public static bool Prefix(EntityBoat __instance, float dt)
-        {
-            if (!__instance.Swimming)
-            {
-                return false;
-            }
-
-            // Ignore lag spikes.
-            dt = Math.Min(0.5f, dt);
-
-            float step = GlobalConstants.PhysicsFrameTime;
-            Vec2d motion = __instance.SeatsToMotion(step);
-
-            // Add some easing to it.
-            __instance.ForwardSpeed += ((motion.X * __instance.SpeedMultiplier) - __instance.ForwardSpeed) * dt;
-            __instance.AngularVelocity += ((motion.Y * __instance.SpeedMultiplier) - __instance.AngularVelocity) * dt;
-
-            EntityPos pos = __instance.SidedPos;
-
-            if (__instance.ForwardSpeed != 0.0)
-            {
-                Vec3d targetMotion = pos.GetViewVector().Mul((float)-__instance.ForwardSpeed).ToVec3d();
-                pos.Motion.X = targetMotion.X;
-                pos.Motion.Z = targetMotion.Z;
-            }
-
-            if (__instance.AngularVelocity != 0.0 && __instance.Api.Side == EnumAppSide.Server)
-            {
-                pos.Yaw += (float)__instance.AngularVelocity * dt * 30f;
-            }
-
-            return false;
-        }
-    }
-    */
-
     // Falling blocks used previous pos to more smoothly move here. This isn't needed now and breaks because previous pos is set from last received server pos.
     // Do they just look weird now because they're too accurate?
     [HarmonyPatch(typeof(EntityBlockFallingRenderer), "RenderFallingBlockEntity")]

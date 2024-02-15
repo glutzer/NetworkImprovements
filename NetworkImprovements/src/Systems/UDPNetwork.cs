@@ -476,7 +476,9 @@ public class UDPNetwork
         // Controlled client id is set on the server.
         Entity entity = sapi.World.GetEntityById(packet.entityId);
 
-        //if (entity.Attributes.GetInt("controller") != player.ClientId) return;
+        // No moving the resonance archive allowed.
+        IMountableSupplier mount = (IMountableSupplier)entity;
+        if (mount == null || !mount.IsMountedBy(player.Entity)) return;
 
         // Get current version of the entity position, if the packet being sent before the player was notified of this discard it.
         int version = entity.WatchedAttributes.GetInt("positionVersionNumber");
@@ -509,7 +511,7 @@ public class UDPNetwork
 
         foreach (IServerPlayer sp in connectedClients.Keys)
         {
-            if (sp == entity) continue;
+            //if (sp == player) continue; Send to self to lerp when getting off.
 
             if (server.Clients[sp.ClientId].TrackedEntities.TryGetValue(entity.EntityId, out bool _))
             {
@@ -559,7 +561,7 @@ public class UDPNetwork
         // Kick illegal connections. IP must match.
         if (endPoint.Address.ToString() != ip)
         {
-            Console.WriteLine($"Invalid connection: {endPoint.Address} trying to connect for {ip}");
+            Console.WriteLine($"Invalid connection: {endPoint.Address} trying to connect for {ip}.");
             return;
         }
 

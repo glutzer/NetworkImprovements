@@ -172,6 +172,24 @@ public class EntityPlayerPhysics : EntityControlledPhysics, IRenderer, IRemotePh
             entity.ServerPos.Motion.X = 0;
             entity.ServerPos.Motion.Y = 0;
             entity.ServerPos.Motion.Z = 0;
+
+            // No-clip detection.
+            if (sapi != null)
+            {
+                collisionTester.ApplyTerrainCollision(entity, lastValid, dtFactor, ref newPos, 0, 0);
+
+                double difference = newPos.DistanceTo(nPos);
+
+                if (difference > 0.2)
+                {
+                    Reconcile(lastValid.XYZ);
+                }
+                else
+                {
+                    lastValid.SetFrom(newPos);
+                }
+            }
+
             return;
         }
 
@@ -367,14 +385,14 @@ public class EntityPlayerPhysics : EntityControlledPhysics, IRenderer, IRemotePh
             accum = 0;
         }
 
-        //IMountable mount = entityPlayer.MountedOn;
-        //IMountableSupplier mountSupplier = mount?.MountSupplier;
-        //IPhysicsTickable tickable = (mountSupplier as Entity)?.SidedProperties.Behaviors.Find(b => b is IPhysicsTickable) as IPhysicsTickable;
+        IMountable mount = entityPlayer.MountedOn;
+        IMountableSupplier mountSupplier = mount?.MountSupplier;
+        IPhysicsTickable tickable = (mountSupplier as Entity)?.SidedProperties.Behaviors.Find(b => b is IPhysicsTickable) as IPhysicsTickable;
 
         while (accum >= interval)
         {
             OnPhysicsTick(interval);
-            //tickable?.OnPhysicsTick(interval);
+            tickable?.OnPhysicsTick(interval);
 
             accum -= interval;
             currentTick++;
@@ -385,17 +403,17 @@ public class EntityPlayerPhysics : EntityControlledPhysics, IRenderer, IRemotePh
                 if (clientMain.GetField<bool>("Spawned") && clientMain.EntityPlayer.Alive)
                 {
                     udpNetwork.SendPlayerPacket();
-                    //if (mountSupplier != null) udpNetwork.SendMountPacket(mountSupplier as Entity);
+                    if (mountSupplier != null) udpNetwork.SendMountPacket(mountSupplier as Entity);
                 }
             }
 
             AfterPhysicsTick(interval);
-            //tickable?.OnPhysicsTick(interval);
+            tickable?.AfterPhysicsTick(interval);
         }
 
         // For camera, lerps from prevPos to current pos by 1 + accum.
         entity.PhysicsUpdateWatcher?.Invoke(accum, prevPos);
-        //(mountSupplier as Entity)?.PhysicsUpdateWatcher?.Invoke(accum, prevPos);
+        (mountSupplier as Entity)?.PhysicsUpdateWatcher?.Invoke(accum, prevPos);
     }
 
     public double RenderOrder => 1;

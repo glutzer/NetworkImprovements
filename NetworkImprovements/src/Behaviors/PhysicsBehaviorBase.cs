@@ -37,4 +37,20 @@ public abstract class PhysicsBehaviorBase : EntityBehavior
     {
         return "";
     }
+
+    public bool IsBeingControlled()
+    {
+        if (isMountable && capi == null)
+        {
+            foreach (IMountable seat in ((IMountableSupplier)entity).MountPoints)
+            {
+                if (seat.CanControl && seat.MountedBy != null)
+                {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
 }

@@ -147,8 +147,23 @@ public class PhysicsManager : LoadBalancedTask
             {
                 Entity entity = sapi.World.GetEntityById(id);
 
-                // Controlled id is the entity id of the player entity controlling this. || entity.Attributes.GetInt("cid") != 0 || entity is IMountableSupplier
+                // Controlled id is the entity id of the player entity controlling this. || entity.Attributes.GetInt("cid") != 0 || entity is IMountableSupplier.
                 if (entity == null || entity is EntityPlayer) continue;
+
+                if (entity is IMountableSupplier supplier)
+                {
+                    bool controlled = false;
+                    foreach (IMountable seat in supplier.MountPoints)
+                    {
+                        // Set position of other entities.
+                        if (seat.CanControl && seat.MountedBy != null)
+                        {
+                            controlled = true;
+                            break;
+                        }
+                    }
+                    if (controlled) continue;
+                }
 
                 EntityAgent entityAgent = entity as EntityAgent;
 

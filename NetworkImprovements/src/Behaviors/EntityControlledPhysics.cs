@@ -456,6 +456,8 @@ public class EntityControlledPhysics : PhysicsBehaviorBase, IPhysicsTickable, IR
     {
         if (entity.State != EnumEntityState.Active) return;
 
+        if (IsBeingControlled()) return;
+
         // Call OnEntityInside events.
         IBlockAccessor blockAccessor = entity.World.BlockAccessor;
         tmpPos.Set(-1, -1, -1);

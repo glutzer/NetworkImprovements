@@ -313,7 +313,9 @@ public class EntityPassivePhysics : PhysicsBehaviorBase, IPhysicsTickable, IRemo
     {
         if (entity.State != EnumEntityState.Active || !Ticking) return;
 
-        EntityPos pos = entity.ServerPos;
+        if (IsBeingControlled()) return;
+
+        EntityPos pos = entity.SidedPos;
 
         // If entity is moving 6 blocks per second test 10 times. Needs dynamic adjustment this is overkill.
         int loops = pos.Motion.Length() > 0.1 ? 10 : 1;
